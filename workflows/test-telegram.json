@@ -1,0 +1,55 @@
+{
+  "id": "test-telegram",
+  "name": "Test Telegram",
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Europe/Madrid",
+    "saveManualExecutions": true
+  },
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "3a3b3c3d-0001-4000-8000-000000000001",
+      "name": "Probar ahora",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Mensaje de prueba: confirma credencial de Telegram + chat ID + parse_mode HTML.\nconst { DateTime } = require('luxon');\nconst ahora = DateTime.now().setZone('Europe/Madrid');\n\nconst chatId = $env.TELEGRAM_CHAT_ID;\nif (!chatId) {\n  throw new Error('TELEGRAM_CHAT_ID esta vacio en .env. Ponelo y corre: docker compose up -d');\n}\n\nconst mensaje = [\n  '<b>Test de n8n</b>',\n  '',\n  'Si estas leyendo esto, funciona:',\n  '- La credencial de Telegram esta bien configurada',\n  '- El chat ID <code>' + chatId + '</code> es correcto',\n  '- El formato HTML se renderiza',\n  '',\n  '<i>Enviado el ' + ahora.toFormat(\"dd/MM/yyyy 'a las' HH:mm:ss\") + ' (Europe/Madrid)</i>',\n].join('\\n');\n\nreturn [{ json: { mensaje, chatId } }];"
+      },
+      "id": "3a3b3c3d-0002-4000-8000-000000000002",
+      "name": "Armar mensaje",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [220, 0]
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $env.TELEGRAM_CHAT_ID }}",
+        "text": "={{ $json.mensaje }}",
+        "additionalFields": {
+          "parse_mode": "HTML",
+          "disable_web_page_preview": true,
+          "appendAttribution": false
+        }
+      },
+      "id": "3a3b3c3d-0003-4000-8000-000000000003",
+      "name": "Enviar a Telegram",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [440, 0]
+    }
+  ],
+  "connections": {
+    "Probar ahora": {
+      "main": [[{ "node": "Armar mensaje", "type": "main", "index": 0 }]]
+    },
+    "Armar mensaje": {
+      "main": [[{ "node": "Enviar a Telegram", "type": "main", "index": 0 }]]
+    }
+  }
+}

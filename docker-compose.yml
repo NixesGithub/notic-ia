@@ -1,0 +1,59 @@
+services:
+  # Servicio de un solo uso: importa los workflows de ./workflows a la base de n8n
+  # antes de que arranque la instancia principal. Comparte el mismo volumen.
+  n8n-import:
+    image: docker.n8n.io/n8nio/n8n:latest
+    container_name: n8n-import
+    restart: "no"
+    environment:
+      - N8N_ENCRYPTION_KEY=${N8N_ENCRYPTION_KEY}
+      - DB_SQLITE_POOL_SIZE=1
+    volumes:
+      - n8n_data:/home/node/.n8n
+      - ./workflows:/workflows:ro
+    # import:workflow SIEMPRE deja los workflows desactivados (--activeState=fromJson
+    # sólo funciona en modo queue/multi-main). Sin este paso extra, cada `docker compose up`
+    # apagaría el workflow y el cron de las 9:00 no se dispararía nunca.
+    # Por eso, después de importar, reactivamos los que tengan "active": true en su JSON.
+    # Los $$ son para que Compose no interprete las variables del shell.
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -e
+        n8n import:workflow --separate --input=/workflows
+        for id in $$(node -e "const fs=require('fs');for(const f of fs.readdirSync('/workflows')){if(!f.endsWith('.json'))continue;const w=JSON.parse(fs.readFileSync('/workflows/'+f,'utf8'));if(w.active&&w.id)console.log(w.id)}"); do
+          echo "Activando $$id"
+          n8n publish:workflow --id="$$id"
+        done
+
+  n8n:
+    image: docker.n8n.io/n8nio/n8n:latest
+    container_name: n8n
+    restart: unless-stopped
+    depends_on:
+      n8n-import:
+        condition: service_completed_successfully
+    ports:
+      - "${N8N_PORT:-5678}:5678"
+    environment:
+      - N8N_ENCRYPTION_KEY=${N8N_ENCRYPTION_KEY}
+      - N8N_HOST=localhost
+      - N8N_PORT=5678
+      - N8N_PROTOCOL=http
+      - N8N_WEBHOOK_URL=http://localhost:${N8N_PORT:-5678}/
+      - GENERIC_TIMEZONE=${GENERIC_TIMEZONE:-Europe/Madrid}
+      - TZ=${GENERIC_TIMEZONE:-Europe/Madrid}
+      # Chat de Telegram al que se envía el resumen diario (lo lee el workflow con $env)
+      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID:-}
+      # Permite leer variables de entorno desde expresiones ($env). Por defecto está bloqueado.
+      - N8N_BLOCK_ENV_ACCESS_IN_NODE=false
+      # Sólo para desarrollo local sobre HTTP; en producción con HTTPS quitar esta línea
+      - N8N_SECURE_COOKIE=false
+      - N8N_DIAGNOSTICS_ENABLED=false
+      - N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS=true
+    volumes:
+      - n8n_data:/home/node/.n8n
+      - ./workflows:/workflows
+
+volumes:
+  n8n_data:

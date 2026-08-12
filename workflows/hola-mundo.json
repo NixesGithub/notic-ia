@@ -1,0 +1,79 @@
+{
+  "id": "hola-mundo-mvp",
+  "name": "Hola Mundo",
+  "active": false,
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "1a1b1c1d-0001-4000-8000-000000000001",
+      "name": "Ejecutar manualmente",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [-40, 0]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "campo-mensaje",
+              "name": "mensaje",
+              "value": "¡Hola Mundo desde n8n!",
+              "type": "string"
+            },
+            {
+              "id": "campo-fecha",
+              "name": "fecha",
+              "value": "={{ $now.toISO() }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "1a1b1c1d-0002-4000-8000-000000000002",
+      "name": "Armar saludo",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [200, 0]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Devuelve un único item con el saludo ya formateado\nconst { mensaje, fecha } = $input.first().json;\n\nreturn [\n  {\n    json: {\n      mensaje,\n      fecha,\n      resumen: `${mensaje} (generado el ${fecha})`,\n    },\n  },\n];\n"
+      },
+      "id": "1a1b1c1d-0003-4000-8000-000000000003",
+      "name": "Formatear salida",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [440, 0]
+    }
+  ],
+  "connections": {
+    "Ejecutar manualmente": {
+      "main": [
+        [
+          {
+            "node": "Armar saludo",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Armar saludo": {
+      "main": [
+        [
+          {
+            "node": "Formatear salida",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {}
+}
