@@ -1,0 +1,286 @@
+{
+  "id": "noticias-ia-now",
+  "name": "Noticias IA ahora",
+  "active": false,
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "4a4b4c4d-0001-4000-8000-000000000001",
+      "name": "Ejecutar ahora",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        -460,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Lista de fuentes. Cada item se convierte en una lectura del nodo RSS.\n// \"peso\" = fiabilidad/relevancia editorial de la fuente (se usa para rankear).\n\n// Las fechas de Google News son difusas (y after:/before: sólo aceptan días),\n// así que pedimos una ventana holgada de días y el recorte fino por horas lo\n// hace el nodo siguiente.\nconst ahora = DateTime.now().setZone('Europe/Madrid');\nconst desde = ahora.minus({ days: 2 }).toISODate();\nconst hasta = ahora.plus({ days: 1 }).toISODate();\n\nfunction googleNews(consulta, idioma, pais) {\n  const q = encodeURIComponent(consulta + ' after:' + desde + ' before:' + hasta);\n  return (\n    'https://news.google.com/rss/search?q=' + q +\n    '&hl=' + idioma + '&gl=' + pais + '&ceid=' + pais + ':' + idioma.split('-')[0]\n  );\n}\n\nconst fuentes = [\n  { fuente: 'TechCrunch',        peso: 3, url: 'https://techcrunch.com/category/artificial-intelligence/feed/' },\n  { fuente: 'The Verge',         peso: 3, url: 'https://www.theverge.com/rss/ai-artificial-intelligence/index.xml' },\n  { fuente: 'Ars Technica',      peso: 3, url: 'https://arstechnica.com/ai/feed/' },\n  { fuente: 'MIT Tech Review',   peso: 3, url: 'https://www.technologyreview.com/topic/artificial-intelligence/feed' },\n  { fuente: 'Wired',             peso: 2, url: 'https://www.wired.com/feed/tag/ai/latest/rss' },\n  { fuente: 'VentureBeat',       peso: 2, url: 'https://venturebeat.com/category/ai/feed/' },\n  { fuente: 'Hacker News',       peso: 2, url: 'https://hnrss.org/frontpage?q=AI+OR+LLM+OR+OpenAI+OR+Anthropic' },\n  { fuente: 'Google News (EN)',  peso: 1, url: googleNews('artificial intelligence', 'en-US', 'US') },\n  { fuente: 'Google News (ES)',  peso: 1, url: googleNews('inteligencia artificial', 'es', 'ES') },\n];\n\nreturn fuentes.map((f) => ({ json: f }));\n"
+      },
+      "id": "4a4b4c4d-0002-4000-8000-000000000002",
+      "name": "Fuentes",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -240,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.url }}",
+        "options": {}
+      },
+      "id": "4a4b4c4d-0003-4000-8000-000000000003",
+      "name": "Leer RSS",
+      "type": "n8n-nodes-base.rssFeedRead",
+      "typeVersion": 1.2,
+      "position": [
+        -20,
+        0
+      ],
+      "onError": "continueRegularOutput",
+      "alwaysOutputData": false,
+      "retryOnFail": true,
+      "maxTries": 2
+    },
+    {
+      "parameters": {
+        "jsCode": "// Filtra las noticias de las ÚLTIMAS 24 HORAS contadas desde el momento de la\n// ejecución (hora de España), deduplica y rankea.\n// Salida: un único item con el cuerpo listo para la API de Anthropic.\n\nconst ZONA = 'Europe/Madrid';\nconst ahora = DateTime.now().setZone(ZONA);\nconst desde = ahora.minus({ hours: 24 });\n// Margen hacia adelante: algunos feeds publican con el reloj adelantado o con la\n// zona mal declarada y sus items más recientes caerían \"en el futuro\".\nconst hasta = ahora.plus({ minutes: 30 });\n\nconst PESOS = {\n  'techcrunch.com': 3,\n  'theverge.com': 3,\n  'arstechnica.com': 3,\n  'technologyreview.com': 3,\n  'wired.com': 2,\n  'venturebeat.com': 2,\n  'news.ycombinator.com': 2,\n  'news.google.com': 1,\n};\n\nconst NOMBRES = {\n  'techcrunch.com': 'TechCrunch',\n  'theverge.com': 'The Verge',\n  'arstechnica.com': 'Ars Technica',\n  'technologyreview.com': 'MIT Tech Review',\n  'wired.com': 'Wired',\n  'venturebeat.com': 'VentureBeat',\n  'news.ycombinator.com': 'Hacker News',\n};\n\n// Las búsquedas de \"IA\" en Google News se llenan de contenido bursátil sindicado\n// (\"¿Deberías comprar acciones de Nvidia?\"). No es noticia de IA: lo penalizamos.\nconst RUIDO = [\n  'motley fool', 'benzinga', 'zacks', 'investing.com', 'seeking alpha',\n  'simply wall st', '24/7 wall st', 'insider monkey', 'barchart',\n  'the globe and mail', 'nasdaq.com', 'fool.com',\n];\n\n// Términos que suelen marcar una noticia relevante de IA.\nconst CLAVES = [\n  'openai', 'anthropic', 'claude', 'chatgpt', 'gpt', 'gemini', 'deepmind',\n  'llama', 'mistral', 'nvidia', 'microsoft', 'meta', 'apple', 'amazon',\n  'model', 'modelo', 'agent', 'agente', 'launch', 'lanza', 'release',\n  'funding', 'raise', 'ronda', 'valuation', 'acquisition', 'adquiere',\n  'regulation', 'regula', 'ley', 'lawsuit', 'demanda', 'benchmark',\n  'open source', 'código abierto', 'chip', 'data center', 'centro de datos',\n];\n\n// Quita acentos/puntuación para poder comparar títulos entre fuentes.\nfunction normalizar(texto) {\n  return (texto || '')\n    .toLowerCase()\n    .normalize('NFD')\n    .replace(/[\\u0300-\\u036f]/g, '')\n    .replace(/[^a-z0-9 ]/g, ' ')\n    .replace(/\\s+/g, ' ')\n    .trim();\n}\n\nfunction limpiarHtml(texto) {\n  return (texto || '').replace(/<[^>]*>/g, '').replace(/\\s+/g, ' ').trim();\n}\n\nconst porClave = new Map();\nconst diag = { total: 0, sinLink: 0, sinFecha: 0, fechaInvalida: 0, fueraDeRango: 0, sinHost: 0, ok: 0 };\n\nfor (const item of $input.all()) {\n  diag.total += 1;\n  const d = item.json;\n  const link = d.link || d.guid || '';\n  if (!link) { diag.sinLink += 1; continue; }\n\n  const iso = d.isoDate || d.pubDate || d.date;\n  if (!iso) { diag.sinFecha += 1; continue; }\n  const fecha = DateTime.fromJSDate(new Date(iso)).setZone(ZONA);\n  if (!fecha.isValid) { diag.fechaInvalida += 1; continue; }\n  if (fecha < desde || fecha > hasta) { diag.fueraDeRango += 1; continue; }\n\n  // Sin new URL(): el sandbox del Code node no expone todos los globales del navegador.\n  const m = String(link).match(/^https?:\\/\\/([^/?#]+)/i);\n  if (!m) { diag.sinHost += 1; continue; }\n  const host = m[1].toLowerCase().replace(/^www\\./, '').replace(/:\\d+$/, '');\n  diag.ok += 1;\n\n  // Google News agrega \" - Medio\" al final del título; lo separamos.\n  let titulo = limpiarHtml(d.title);\n  let fuente = NOMBRES[host] || host;\n  if (host === 'news.google.com') {\n    const partes = titulo.split(' - ');\n    if (partes.length > 1) {\n      fuente = partes.pop().trim();\n      titulo = partes.join(' - ').trim();\n    } else {\n      fuente = 'Google News';\n    }\n  }\n\n  const clave = normalizar(titulo).split(' ').slice(0, 9).join(' ');\n  if (!clave) continue;\n\n  const texto = normalizar(titulo + ' ' + (d.contentSnippet || ''));\n  const aciertos = CLAVES.filter((k) => texto.includes(normalizar(k))).length;\n  const peso = PESOS[host] ?? 1;\n\n  const existente = porClave.get(clave);\n  if (existente) {\n    // La misma noticia en varias fuentes es señal fuerte de importancia.\n    existente.apariciones += 1;\n    if (peso > existente.peso) {\n      existente.peso = peso;\n      existente.titulo = titulo;\n      existente.url = link;\n      existente.fuente = fuente;\n    }\n    continue;\n  }\n\n  porClave.set(clave, {\n    titulo,\n    url: link,\n    fuente,\n    hora: fecha.toFormat('dd/MM HH:mm'),\n    // Cuánto hace que se publicó: en una ejecución bajo demanda importa más que la hora absoluta.\n    antiguedad: Math.max(0, Math.round(ahora.diff(fecha, 'minutes').minutes)),\n    extracto: limpiarHtml(d.contentSnippet || d.content || '').slice(0, 300),\n    peso,\n    aciertos,\n    apariciones: 1,\n  });\n}\n\nconst candidatos = [...porClave.values()]\n  .map((c) => {\n    const esRuido = RUIDO.some((r) => c.fuente.toLowerCase().includes(r));\n    // A igualdad de todo lo demás, lo publicado en las últimas 6 h va primero.\n    const frescura = c.antiguedad <= 360 ? 2 : 0;\n    const score = c.peso * 2 + c.aciertos + c.apariciones * 2 + frescura - (esRuido ? 12 : 0);\n    return { ...c, score };\n  })\n  .filter((c) => c.score > 0)\n  .sort((a, b) => b.score - a.score)\n  .slice(0, 40);\n\nconst fechaTexto = ahora.setLocale('es').toFormat(\"d 'de' LLLL 'de' yyyy 'a las' HH:mm\");\n\n// Formatea la antigüedad como \"hace 2 h 15 min\".\nfunction hace(minutos) {\n  const h = Math.floor(minutos / 60);\n  const m = minutos % 60;\n  return 'hace ' + (h ? h + ' h ' + m + ' min' : m + ' min');\n}\n\n// Lista numerada que lee el modelo.\nconst listado = candidatos\n  .map((c, i) =>\n    [\n      `[${i + 1}] ${c.titulo}`,\n      `    fuente: ${c.fuente} | publicado: ${c.hora} (${hace(c.antiguedad)}) | apariciones: ${c.apariciones}`,\n      `    url: ${c.url}`,\n      c.extracto ? `    extracto: ${c.extracto}` : null,\n    ]\n      .filter(Boolean)\n      .join('\\n')\n  )\n  .join('\\n\\n');\n\nconst system = [\n  'Eres un analista que prepara un briefing de noticias de inteligencia artificial bajo demanda para un desarrollador de software.',\n  'Recibes una lista de titulares candidatos publicados en las últimas 24 horas, ya deduplicados.',\n  '',\n  'Tu tarea: elegir las 10 noticias MÁS IMPORTANTES y resumir cada una.',\n  '',\n  'Criterios de importancia, en este orden:',\n  '1. Impacto real: lanzamientos de modelos, cambios de capacidad, precios, disponibilidad de APIs.',\n  '2. Movimientos estructurales del sector: financiación relevante, adquisiciones, regulación, litigios.',\n  '3. Avances técnicos o de investigación con consecuencias prácticas.',\n  'Penaliza: opinión, listicles, contenido promocional, refritos y notas sin hecho nuevo.',\n  'A igualdad de importancia, prioriza lo más reciente.',\n  '',\n  'Reglas de salida:',\n  '- Escribe SIEMPRE en español de España.',\n  '- \"titulo\": máximo 80 caracteres, sin comillas ni emojis.',\n  '- \"resumen\": 1 o 2 frases con el hecho concreto y por qué importa. Nada de relleno.',\n  '- \"url\" y \"fuente\": cópialos EXACTAMENTE del candidato elegido. No inventes URLs.',\n  '- \"importancia\": 1 (menor) a 10 (mayor).',\n  '- Ordena el array de mayor a menor importancia.',\n  '- Si hay menos de 10 candidatos con valor real, devuelve menos. No rellenes.',\n  '- \"resumen_global\": una frase sobre el tema dominante de las últimas horas.',\n].join('\\n');\n\nconst esquema = {\n  type: 'object',\n  properties: {\n    titulares: {\n      type: 'array',\n      items: {\n        type: 'object',\n        properties: {\n          titulo: { type: 'string' },\n          resumen: { type: 'string' },\n          fuente: { type: 'string' },\n          url: { type: 'string' },\n          importancia: { type: 'integer', enum: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10] },\n        },\n        required: ['titulo', 'resumen', 'fuente', 'url', 'importancia'],\n        additionalProperties: false,\n      },\n    },\n    resumen_global: { type: 'string' },\n  },\n  required: ['titulares', 'resumen_global'],\n  additionalProperties: false,\n};\n\nconst body = {\n  // Sonnet 5 en vez de Opus: resumir titulares no necesita el modelo más caro.\n  model: 'claude-sonnet-5',\n  max_tokens: 16000,\n  // Sin \"fallbacks\": Sonnet 5 no acepta ese parámetro (400 invalid_request_error).\n  // Si un clasificador rechaza la petición llega stop_reason: 'refusal' y lo\n  // detecta el nodo \"Formatear mensaje\".\n  system,\n  messages: [\n    {\n      role: 'user',\n      content: `Titulares candidatos de las últimas 24 horas, hasta el ${fechaTexto}:\\n\\n${listado}`,\n    },\n  ],\n  output_config: { format: { type: 'json_schema', schema: esquema } },\n};\n\nconsole.log('Filtrado:', JSON.stringify(diag));\n\nreturn [\n  {\n    json: {\n      fecha: fechaTexto,\n      totalCandidatos: candidatos.length,\n      diagnostico: diag,\n      body,\n    },\n  },\n];\n"
+      },
+      "id": "4a4b4c4d-0004-4000-8000-000000000004",
+      "name": "Seleccionar últimas 24 h",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        200,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "hay-candidatos",
+              "leftValue": "={{ $json.totalCandidatos }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "4a4b4c4d-0005-4000-8000-000000000005",
+      "name": "¿Hay noticias?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        420,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "anthropicApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "anthropic-version",
+              "value": "2023-06-01"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.body) }}",
+        "options": {
+          "timeout": 300000
+        }
+      },
+      "id": "4a4b4c4d-0006-4000-8000-000000000006",
+      "name": "Resumir con Claude",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        660,
+        -100
+      ],
+      "credentials": {
+        "anthropicApi": {
+          "id": "zNBMuk8BJyegIMaw",
+          "name": "Anthropic account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Convierte la respuesta de Anthropic en uno o varios mensajes de Telegram.\n// Telegram corta a 4096 caracteres, así que troceamos.\n\nconst LIMITE = 3800;\nconst respuesta = $json;\nconst fecha = $('Seleccionar últimas 24 h').first().json.fecha;\n\nif (respuesta.stop_reason === 'refusal') {\n  throw new Error(\n    'Anthropic rechazó la petición: ' + (respuesta.stop_details?.explanation || 'sin detalle')\n  );\n}\n\n// Con \"thinking\" activo la respuesta trae bloques de razonamiento antes del texto.\nconst bloqueTexto = (respuesta.content || []).find((b) => b.type === 'text');\nif (!bloqueTexto) {\n  throw new Error('La respuesta no contiene ningún bloque de texto: ' + JSON.stringify(respuesta).slice(0, 500));\n}\n\nlet datos;\ntry {\n  datos = JSON.parse(bloqueTexto.text);\n} catch (e) {\n  throw new Error('La respuesta no es JSON válido: ' + bloqueTexto.text.slice(0, 500));\n}\n\n// Telegram en modo HTML sólo permite unas pocas etiquetas: hay que escapar el resto.\nfunction esc(texto) {\n  return String(texto || '')\n    .replace(/&/g, '&amp;')\n    .replace(/</g, '&lt;')\n    .replace(/>/g, '&gt;');\n}\n\nconst bloques = [];\nbloques.push(`<b>🤖 Noticias IA — últimas 24 h</b>\\n<i>al ${esc(fecha)}</i>\\n\\n<i>${esc(datos.resumen_global)}</i>`);\n\n(datos.titulares || []).forEach((n, i) => {\n  bloques.push(\n    [\n      `<b>${i + 1}. ${esc(n.titulo)}</b>`,\n      esc(n.resumen),\n      `<a href=\"${esc(n.url)}\">${esc(n.fuente)}</a> · importancia ${n.importancia}/10`,\n    ].join('\\n')\n  );\n});\n\n// Agrupamos bloques enteros sin partir una noticia por la mitad.\nconst mensajes = [];\nlet actual = '';\nfor (const bloque of bloques) {\n  if (actual && (actual + '\\n\\n' + bloque).length > LIMITE) {\n    mensajes.push(actual);\n    actual = bloque;\n  } else {\n    actual = actual ? actual + '\\n\\n' + bloque : bloque;\n  }\n}\nif (actual) mensajes.push(actual);\n\nconst uso = respuesta.usage || {};\nconsole.log(\n  `Tokens: entrada ${uso.input_tokens ?? '?'} / salida ${uso.output_tokens ?? '?'} | modelo ${respuesta.model}`\n);\n\nreturn mensajes.map((mensaje) => ({ json: { mensaje } }));\n"
+      },
+      "id": "4a4b4c4d-0007-4000-8000-000000000007",
+      "name": "Formatear mensaje",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        -100
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// No hubo ninguna noticia en las últimas 24 h (feeds caídos o rato sin movimiento).\nconst fecha = $('Seleccionar últimas 24 h').first().json.fecha;\nreturn [\n  {\n    json: {\n      mensaje: `<b>🤖 Noticias IA — últimas 24 h</b>\\n<i>al ${fecha}</i>\\n\\nNo se encontraron noticias de IA publicadas en las últimas 24 horas en las fuentes configuradas.`,\n    },\n  },\n];\n"
+      },
+      "id": "4a4b4c4d-0008-4000-8000-000000000008",
+      "name": "Sin noticias",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        120
+      ]
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $env.TELEGRAM_CHAT_ID }}",
+        "text": "={{ $json.mensaje }}",
+        "additionalFields": {
+          "parse_mode": "HTML",
+          "disable_web_page_preview": true,
+          "appendAttribution": false
+        }
+      },
+      "id": "4a4b4c4d-0009-4000-8000-000000000009",
+      "name": "Enviar a Telegram",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        1120,
+        0
+      ],
+      "credentials": {
+        "telegramApi": {
+          "id": "56ozS4ND6jzpi6Bf",
+          "name": "Telegram account"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Ejecutar ahora": {
+      "main": [
+        [
+          {
+            "node": "Fuentes",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fuentes": {
+      "main": [
+        [
+          {
+            "node": "Leer RSS",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Leer RSS": {
+      "main": [
+        [
+          {
+            "node": "Seleccionar últimas 24 h",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Seleccionar últimas 24 h": {
+      "main": [
+        [
+          {
+            "node": "¿Hay noticias?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿Hay noticias?": {
+      "main": [
+        [
+          {
+            "node": "Resumir con Claude",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Sin noticias",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Resumir con Claude": {
+      "main": [
+        [
+          {
+            "node": "Formatear mensaje",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Formatear mensaje": {
+      "main": [
+        [
+          {
+            "node": "Enviar a Telegram",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sin noticias": {
+      "main": [
+        [
+          {
+            "node": "Enviar a Telegram",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Europe/Madrid",
+    "saveManualExecutions": true
+  },
+  "pinData": {}
+}

@@ -13,7 +13,9 @@ convention. Keep it that way.
 
 Current workflows: `hola-mundo` (smoke test), `test-telegram` (validates the Telegram credential and
 chat ID without spending Anthropic credits), `noticias-ia` (the real one — daily 09:00 Europe/Madrid
-AI-news digest: 9 RSS feeds → dedupe/rank → Claude summarizes → Telegram).
+AI-news digest: 9 RSS feeds → dedupe/rank → Claude summarizes → Telegram), and `noticias-ia-now`
+(same pipeline, manual trigger only, window = the last 24 h counted from the moment you run it, so
+it reports *now* instead of yesterday).
 
 ## Commands
 
@@ -79,14 +81,22 @@ Symptoms: `Credentials not found` (HTTP Request node) or `Node does not have any
 (app nodes). The block looks like:
 
 ```json
-"credentials": { "anthropicApi": { "id": "daNyZM3L7Inr38Hz", "name": "Anthropic account" } }
+"credentials": { "anthropicApi": { "id": "zNBMuk8BJyegIMaw", "name": "Anthropic account" } }
 ```
 
-Those ids are **local to this volume** — wiping it or moving machines invalidates them.
+Those ids are **local to this volume** — wiping it or moving machines invalidates them, and a stale
+id fails exactly like a missing one. Read the real ones out of the DB (query above) instead of
+trusting the JSON. Current: `zNBMuk8BJyegIMaw` (`anthropicApi`), `56ozS4ND6jzpi6Bf` (`telegramApi`).
 
 **`new URL()` does not exist in the Code node sandbox.** It throws, and a `try/catch { continue }`
 around it will silently drop every item (this once turned 283 RSS items into 0 candidates with no
-error surfaced). Parse hosts with a regex. Luxon's `DateTime` *is* available via `require('luxon')`.
+error surfaced). Parse hosts with a regex.
+
+**The Code node runs in the isolated task runner, which rejects every external `require()`.**
+`require('luxon')` fails with `Module 'luxon' is disallowed` unless the module is allowlisted — hence
+`NODE_FUNCTION_ALLOW_EXTERNAL=luxon` in the compose file. Note that Luxon's `DateTime` is *also*
+exposed as a plain global, with no `require` at all; the `noticias-ia*` workflows use that form and
+are therefore immune to this. Prefer the global.
 
 **`$env` in expressions requires `N8N_BLOCK_ENV_ACCESS_IN_NODE=false`** (already set in the compose
 file). Otherwise: `ExpressionError: access to env vars denied`.
@@ -107,6 +117,17 @@ digest. Use `after:`/`before:` with explicit dates, generated at runtime from Lu
 
 **The `anthropicApi` credential only injects `x-api-key`.** When calling the API from an HTTP Request
 node, add `anthropic-version: 2023-06-01` manually.
+
+**`fallbacks` is not accepted on `claude-sonnet-5`** — `400 invalid_request_error: 'claude-sonnet-5' does not
+support the 'fallbacks' parameter`. Both `noticias-ia*` workflows run on Sonnet 5 (cheaper than Opus and plenty
+for summarizing headlines), so the `fallbacks` field and its `anthropic-beta: server-side-fallback-*` header are
+gone. A safety refusal now arrives as `stop_reason: 'refusal'`, which `Formatear mensaje` already throws on.
+Re-adding either one means going back to Opus.
+
+**`docker compose up -d --force-recreate n8n-import` returns before the import finishes.** Chaining an
+`n8n execute` onto the same command line runs the *previous* version of the workflow — which looks like a
+successful run of an edit that never landed. Wait for the container to exit first:
+`until [ "$(docker inspect -f '{{.State.Status}}' n8n-import)" = exited ]; do :; done`.
 
 ## Verification loop
 

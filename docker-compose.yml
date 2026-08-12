@@ -47,6 +47,9 @@ services:
       - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID:-}
       # Permite leer variables de entorno desde expresiones ($env). Por defecto está bloqueado.
       - N8N_BLOCK_ENV_ACCESS_IN_NODE=false
+      # El Code node corre en el task runner aislado, que rechaza cualquier require()
+      # externo salvo los que estén en esta lista. Sin esto: "Module 'luxon' is disallowed".
+      - NODE_FUNCTION_ALLOW_EXTERNAL=luxon
       # Sólo para desarrollo local sobre HTTP; en producción con HTTPS quitar esta línea
       - N8N_SECURE_COOKIE=false
       - N8N_DIAGNOSTICS_ENABLED=false
