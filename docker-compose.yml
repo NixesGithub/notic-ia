@@ -13,7 +13,7 @@ services:
       - ./workflows:/workflows:ro
     # import:workflow SIEMPRE deja los workflows desactivados (--activeState=fromJson
     # sólo funciona en modo queue/multi-main). Sin este paso extra, cada `docker compose up`
-    # apagaría el workflow y el cron de las 9:00 no se dispararía nunca.
+    # apagaría el workflow y el cron de las 11:00 no se dispararía nunca.
     # Por eso, después de importar, reactivamos los que tengan "active": true en su JSON.
     # Los $$ son para que Compose no interprete las variables del shell.
     entrypoint: ["/bin/sh", "-c"]

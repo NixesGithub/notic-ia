@@ -10,7 +10,7 @@ automáticamente sus workflows al arrancar.
 |---|---|
 | **Hola Mundo** | Ejemplo mínimo para verificar que la instancia funciona |
 | **Test Telegram** | Manda un mensaje de prueba a tu chat. Sirve para validar credencial + chat ID sin gastar API de Anthropic |
-| **Noticias IA diarias** | Cada mañana a las 9:00 (hora de España) lee 9 fuentes de noticias de IA, se queda con las del día anterior, las rankea, pide a Claude el top 10 resumido y lo manda por Telegram |
+| **Noticias IA diarias** | Cada mañana a las 11:00 (hora de España) lee 9 fuentes de noticias de IA, se queda con las del día anterior, las rankea, pide a Claude el top 10 resumido y lo manda por Telegram |
 
 ## Estructura
 
@@ -67,7 +67,7 @@ tomado el puerto 5679 del task broker.)
 ## Qué hace
 
 ```
-Cada día 9:00 (Europe/Madrid)
+Cada día 11:00 (Europe/Madrid)
    └─ Fuentes ......... genera las 9 URLs de RSS (las de Google News con el rango de fechas del día anterior)
       └─ Leer RSS ..... lee los 9 feeds (~280 noticias)
          └─ Seleccionar del día anterior
@@ -201,10 +201,10 @@ El nodo *Seleccionar del día anterior* devuelve un campo `diagnostico` con el d
 
 ## Cosas que conviene saber
 
-- **Si el ordenador está apagado o suspendido a las 9:00, la ejecución no se recupera.** n8n no
+- **Si el ordenador está apagado o suspendido a las 11:00, la ejecución no se recupera.** n8n no
   reintenta los triggers de schedule que se perdió. Para un digest que no se salte días necesitás
   que la máquina esté encendida, o mover esto a un VPS.
-- **Ejecutarlo a media tarde da menos resultados que a las 9:00.** Los feeds sólo guardan entre 10 y
+- **Ejecutarlo a media tarde da menos resultados que a las 11:00.** Los feeds sólo guardan entre 10 y
   20 noticias: por la tarde ya están llenos de las de hoy y las de ayer se cayeron de la ventana. Por
   eso las URLs de Google News se generan con `after:`/`before:` acotando el día anterior — sin eso,
   Google devuelve casi sólo noticias del día en curso.

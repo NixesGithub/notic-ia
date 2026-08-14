@@ -9,13 +9,13 @@
           "interval": [
             {
               "field": "cronExpression",
-              "expression": "0 9 * * *"
+              "expression": "0 11 * * *"
             }
           ]
         }
       },
       "id": "2a2b2c2d-0001-4000-8000-000000000001",
-      "name": "Cada día a las 9:00",
+      "name": "Cada día a las 11:00",
       "type": "n8n-nodes-base.scheduleTrigger",
       "typeVersion": 1.2,
       "position": [
@@ -201,7 +201,7 @@
     }
   ],
   "connections": {
-    "Cada día a las 9:00": {
+    "Cada día a las 11:00": {
       "main": [
         [
           {

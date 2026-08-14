@@ -12,7 +12,7 @@ Prose (README, comments, node names, UI strings) is written in **Spanish**, per 
 convention. Keep it that way.
 
 Current workflows: `hola-mundo` (smoke test), `test-telegram` (validates the Telegram credential and
-chat ID without spending Anthropic credits), `noticias-ia` (the real one — daily 09:00 Europe/Madrid
+chat ID without spending Anthropic credits), `noticias-ia` (the real one — daily 11:00 Europe/Madrid
 AI-news digest: 9 RSS feeds → dedupe/rank → Claude summarizes → Telegram), and `noticias-ia-now`
 (same pipeline, manual trigger only, window = the last 24 h counted from the moment you run it, so
 it reports *now* instead of yesterday).
