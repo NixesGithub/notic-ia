@@ -49,7 +49,15 @@ CABECERAS = {
 
 # Anclas semánticas, no clases CSS. El enlace a /stargazers da de una el nombre
 # del repo y su total de estrellas.
-RE_STARGAZERS = re.compile(r'href="/([^"/]+)/([^"/]+)/stargazers"[^>]*>\s*([\d.,]+)\s*<', re.I)
+#
+# Se captura TODO el contenido del <a> y se limpia después, en vez de exigir que
+# el número venga pegado al '>': GitHub mete dentro del enlace el icono
+#   <svg class="octicon octicon-star"></svg>
+# antes de la cifra, y una expresión que pidiera dígitos inmediatos falla en
+# silencio dejando el total a 0. Pasó de verdad.
+RE_STARGAZERS = re.compile(
+    r'href="/([^"/]+)/([^"/]+)/stargazers"[^>]*>(.{0,400}?)</a>', re.S | re.I
+)
 RE_NOMBRE_H2 = re.compile(r"<h2[^>]*>.*?href=\"/([^\"/]+)/([^\"/]+)\"", re.S | re.I)
 RE_GANADAS = re.compile(r"([\d.,]+)\s*stars?\s+(today|this week|this month)", re.I)
 RE_LENGUAJE = re.compile(r'itemprop="programmingLanguage"[^>]*>\s*([^<]+?)\s*<', re.I)
@@ -94,7 +102,10 @@ def _descargar(periodo: str) -> str:
 
 def parsear(html: str) -> tuple[list[dict], dict]:
     """Saca un repo por cada <article> de la página. Devuelve (repos, diagnostico)."""
-    diag = {"articulos": 0, "sinNombre": 0, "sinGanadas": 0, "ok": 0}
+    diag = {
+        "articulos": 0, "sinNombre": 0, "sinGanadas": 0,
+        "sinTotal": 0, "sinLenguaje": 0, "sinDescripcion": 0, "ok": 0,
+    }
     encontrados: list[dict] = []
 
     # Cada fila de la lista es un <article>. Se parte por ahí en vez de intentar
@@ -108,9 +119,12 @@ def parsear(html: str) -> tuple[list[dict], dict]:
         estrellas_total = 0
         coincidencia = RE_STARGAZERS.search(trozo)
         if coincidencia:
-            duenio, repo, total = coincidencia.groups()
-            estrellas_total = _entero(total)
+            duenio, repo, interior = coincidencia.groups()
+            estrellas_total = _entero(_texto(interior))
+            if not estrellas_total:
+                diag["sinTotal"] += 1
         else:
+            diag["sinTotal"] += 1
             # El enlace de stargazers es la vía principal; el <h2> es el respaldo.
             coincidencia = RE_NOMBRE_H2.search(trozo)
             if not coincidencia:
@@ -132,11 +146,15 @@ def parsear(html: str) -> tuple[list[dict], dict]:
         coincidencia = RE_LENGUAJE.search(trozo)
         if coincidencia:
             lenguaje = _texto(coincidencia.group(1))
+        else:
+            diag["sinLenguaje"] += 1
 
         descripcion = ""
         coincidencia = RE_DESCRIPCION.search(trozo)
         if coincidencia:
             descripcion = _texto(coincidencia.group(1))
+        else:
+            diag["sinDescripcion"] += 1
 
         diag["ok"] += 1
         encontrados.append({
@@ -338,7 +356,7 @@ def generar(fecha_texto: str, api_key: str, solo_candidatos: bool = False) -> li
     if solo_candidatos:
         for i, c in enumerate(candidatos[:15], start=1):
             log(f"  [{i}] +{c['ganadas']} ⭐ {c['periodo']:<12} (total {c['estrellas']:>7}) "
-                f"{c['nombre']} — {c['descripcion'][:55]}")
+                f"[{c['lenguaje'] or '?'}] {c['nombre']} — {c['descripcion'][:50]}")
         return []
 
     log(f"Explicando con {MODELO}...")

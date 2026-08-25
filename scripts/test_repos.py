@@ -9,7 +9,9 @@ detecta un cambio de marcado en producción es el error que levanta `generar()`
 cuando no extrae ni un repo, y el diagnóstico del log.
 
 Si alguna vez falla en producción: guardá el HTML real, pegalo aquí como fixture
-y arreglá `parsear()` contra él.
+y arreglá `parsear()` contra él. Ya pasó una vez: el fixture no llevaba el icono
+<svg class="octicon octicon-star"> dentro del enlace de stargazers, y por eso el
+test daba verde mientras en producción el total de estrellas salía siempre 0.
 """
 
 from __future__ import annotations
@@ -40,6 +42,7 @@ FILA_COMPLETA = """
       <span itemprop="programmingLanguage">Rust</span>
     </span>
     <a href="/acme/cohete/stargazers" class="Link--muted d-inline-block mr-3">
+      <svg aria-hidden="true" class="octicon octicon-star"><path d="M8 .25a.75"></path></svg>
       12,345
     </a>
     <a href="/acme/cohete/forks" class="Link--muted d-inline-block mr-3">678</a>
@@ -52,7 +55,7 @@ FILA_SIN_DESCRIPCION_NI_LENGUAJE = """
 <article class="Box-row">
   <h2 class="h3 lh-condensed"><a href="/acme/pelado">acme / pelado</a></h2>
   <div class="f6 color-fg-muted mt-2">
-    <a href="/acme/pelado/stargazers" class="Link--muted d-inline-block mr-3">890</a>
+    <a href="/acme/pelado/stargazers" class="Link--muted d-inline-block mr-3"><svg class="octicon octicon-star"></svg> 890</a>
     <span class="d-inline-block float-sm-right">45 stars today</span>
   </div>
 </article>
@@ -73,7 +76,7 @@ FILA_SIN_GANADAS = """
 <article class="Box-row">
   <h2 class="h3 lh-condensed"><a href="/acme/quieto">acme / quieto</a></h2>
   <div class="f6 color-fg-muted mt-2">
-    <a href="/acme/quieto/stargazers" class="Link--muted d-inline-block mr-3">2,000</a>
+    <a href="/acme/quieto/stargazers" class="Link--muted d-inline-block mr-3"><svg class="octicon octicon-star"></svg> 2,000</a>
   </div>
 </article>
 """
@@ -95,7 +98,7 @@ FILA_SEMANAL = """
   <h2 class="h3 lh-condensed"><a href="/acme/constante">acme / constante</a></h2>
   <p class="col-9 color-fg-muted my-1 pr-4">Sube despacio pero sin parar</p>
   <div class="f6 color-fg-muted mt-2">
-    <a href="/acme/constante/stargazers" class="Link--muted d-inline-block mr-3">5,000</a>
+    <a href="/acme/constante/stargazers" class="Link--muted d-inline-block mr-3"><svg class="octicon octicon-star"></svg> 5,000</a>
     <span class="d-inline-block float-sm-right">2,100 stars this week</span>
   </div>
 </article>
@@ -120,10 +123,16 @@ def main() -> int:
     comprobar(diag["ok"] == 4, f"extrae 4 (la inservible se descarta) -> {diag['ok']}")
     comprobar(diag["sinNombre"] == 1, f"contabiliza la fila sin nombre -> {diag['sinNombre']}")
     comprobar(diag["sinGanadas"] == 1, f"contabiliza la fila sin estrellas ganadas -> {diag['sinGanadas']}")
+    comprobar(diag["sinTotal"] == 2, f"contabiliza las filas sin total -> {diag['sinTotal']}")
+    comprobar(diag["sinLenguaje"] == 3, f"contabiliza las filas sin lenguaje -> {diag['sinLenguaje']}")
+    comprobar(diag["sinDescripcion"] == 2, f"contabiliza las filas sin descripción -> {diag['sinDescripcion']}")
 
     cohete = por_nombre.get("acme/cohete", {})
     comprobar(cohete.get("ganadas") == 1234, f"'1,234 stars today' -> {cohete.get('ganadas')}")
-    comprobar(cohete.get("estrellas") == 12345, f"total con coma de millares -> {cohete.get('estrellas')}")
+    comprobar(cohete.get("estrellas") == 12345,
+              f"total con coma de millares, con el icono <svg> por medio -> {cohete.get('estrellas')}")
+    comprobar(por_nombre.get("acme/pelado", {}).get("estrellas") == 890,
+              "el total se lee aunque el icono y el número estén en la misma línea")
     comprobar(cohete.get("lenguaje") == "Rust", f"lenguaje -> {cohete.get('lenguaje')!r}")
     comprobar(cohete.get("descripcion") == "Un servidor de <cosas> rápido & pequeño",
               f"descripción con entidades y saltos de línea -> {cohete.get('descripcion')!r}")

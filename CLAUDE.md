@@ -33,9 +33,19 @@ and never on CSS classes like `Box-row`; raise loudly when zero repos parse, bec
 has rows and a silent empty result would look like a quiet day; and keep the per-period diagnostic
 (`{articulos, sinNombre, sinGanadas, ok}`) so a markup change is diagnosable from the job log alone.
 
-Two traps already paid for in `parsear()`: `<p[^>]*>` also matches `<path>` inside the title's
-`<svg>` (hence `<p\b`), and scraped HTML carries entities that RSS did not — strip tags first, then
-`html.unescape`, never the other way round.
+Three traps already paid for in `parsear()`. `<p[^>]*>` also matches `<path>` inside the title's
+`<svg>` (hence `<p\b`). Scraped HTML carries entities that RSS did not — strip tags first, then
+`html.unescape`, never the other way round. And **numbers are not adjacent to the `>` that precedes
+them**: GitHub puts `<svg class="octicon octicon-star">` inside the stargazers link, so a pattern
+demanding digits right after the tag silently yielded `estrellas: 0` on every row while the fixture
+(which lacked the icon) stayed green. `RE_STARGAZERS` now captures the whole `<a>` body and cleans it
+afterwards. General lesson for this file: **capture the container, clean it after — never assume
+where inside an element the text sits.**
+
+Because a partial parse fails silently by design (one missing field is not fatal), `parsear()` counts
+`sinTotal`, `sinLenguaje` and `sinDescripcion` alongside `sinNombre`/`sinGanadas`. A nonzero count
+across all rows means that field's anchor is gone, and the `--dry-run` listing prints the language so
+the same failure is visible there too. Check those counters before believing a green run.
 
 **The daily digest exists twice, on purpose.** `workflows/noticias-ia.json` runs it in local n8n at
 11:00; `.github/workflows/noticias-ia.yml` + `scripts/noticias_ia.py` run the same pipeline on

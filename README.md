@@ -114,8 +114,12 @@ Está mitigado así:
 - **Fallar en silencio no es una opción.** Trending siempre trae filas, así que
   si el parseo saca cero repos no es "un día tranquilo": se levanta un error que
   dice explícitamente que hay que revisar `parsear()`.
-- **El log dice qué se rompió.** El diagnóstico cuenta filas vistas, cuántas sin
-  nombre, cuántas sin contador y cuántas salieron bien, por periodo.
+- **El log dice qué se rompió, campo por campo.** El diagnóstico cuenta, por
+  periodo, las filas vistas y cuántas se quedaron sin nombre, sin contador de
+  estrellas ganadas, sin total, sin lenguaje y sin descripción. Un campo que
+  falta en *todas* las filas significa que su ancla desapareció. Conviene
+  mirarlo antes de dar por buena una ejecución: que falte un campo no es fatal
+  —el mensaje se adapta— así que se rompe en silencio a propósito.
 
 Los números del mensaje **salen siempre de la página, nunca del modelo** —
 Claude sólo aporta texto. Si devuelve un repo que no estaba entre los
