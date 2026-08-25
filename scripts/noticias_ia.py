@@ -16,7 +16,6 @@ Variables de entorno:
   ANTHROPIC_API_KEY    obligatoria salvo en --dry-run
   TELEGRAM_BOT_TOKEN   obligatoria salvo en --dry-run
   TELEGRAM_CHAT_ID     obligatoria salvo en --dry-run
-  GITHUB_TOKEN         opcional; sube el límite de la API de búsqueda de GitHub
   DIGEST_TZ            zona horaria del digest (por defecto Europe/Madrid)
   DIGEST_HOUR          hora local a la que debe salir (por defecto 9)
   DIGEST_MODEL         modelo de Anthropic (por defecto claude-sonnet-5)

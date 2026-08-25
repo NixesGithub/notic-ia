@@ -20,11 +20,22 @@ equivalent**; that drift is deliberate, not an oversight.
 the stars/day ranking and the message formatting — including that the numbers in the message come
 from the search response and never from the model. Run it after touching `repos.py`.
 
-**GitHub publishes no trending API.** `github.com/trending` is HTML and this repo does not scrape
-HTML (same reason the news come from RSS). `repos.py` uses the official search API with two windows
-and computes velocity as `stars / days since creation` — an average since day zero, not stars gained
-this week, because the API exposes no star history. That proxy works because the windows only admit
-young repos. If you widen the windows, the proxy degrades.
+**GitHub publishes no trending API — so `repos.py` scrapes `github.com/trending`, deliberately.**
+There is no RSS, no API, no feed: the page is the only source. Do not "fix" this by switching to the
+search API and deriving velocity from `stars / age` — that computes a number GitHub already
+publishes exactly (`1,234 stars today`), and worse. The README's "no HTML scraping" rule is about
+**news sources**, and its stated reason is that outlets *do* publish RSS; it does not generalise to
+sources that have no machine interface at all.
+
+Scraping's cost is fragility, mitigated three ways, all of which must survive any edit here:
+anchor on semantics (`/stargazers` href, `itemprop="programmingLanguage"`, the literal `stars today`)
+and never on CSS classes like `Box-row`; raise loudly when zero repos parse, because trending always
+has rows and a silent empty result would look like a quiet day; and keep the per-period diagnostic
+(`{articulos, sinNombre, sinGanadas, ok}`) so a markup change is diagnosable from the job log alone.
+
+Two traps already paid for in `parsear()`: `<p[^>]*>` also matches `<path>` inside the title's
+`<svg>` (hence `<p\b`), and scraped HTML carries entities that RSS did not — strip tags first, then
+`html.unescape`, never the other way round.
 
 **The daily digest exists twice, on purpose.** `workflows/noticias-ia.json` runs it in local n8n at
 11:00; `.github/workflows/noticias-ia.yml` + `scripts/noticias_ia.py` run the same pipeline on

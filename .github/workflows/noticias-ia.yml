@@ -81,9 +81,6 @@ jobs:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          # Lo da Actions solo; sube el límite de la API de búsqueda de GitHub
-          # de 10 a 30 peticiones por minuto. No hay que configurarlo.
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           python scripts/noticias_ia.py \
             --ventana "${{ inputs.ventana || 'ayer' }}" \

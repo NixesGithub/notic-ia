@@ -83,36 +83,43 @@ tocás una, tocá la otra.
 
 ## Sección 2: repos en tendencia
 
-Repositorios de GitHub que están ganando estrellas rápido, con una explicación
-de **para qué sirve** cada herramienta:
+Los repositorios que GitHub lista como tendencia, con una explicación de **para
+qué sirve** cada herramienta:
 
 ```
-API de búsqueda de GitHub (2 consultas)
-   └─ Descartar forks, archivados y repos sin commits recientes
-      └─ Rankear por estrellas/día → top 25
-         └─ Claude elige los 8 más relevantes y explica cada uno
-            └─ Enviar a Telegram
+github.com/trending (daily + weekly)
+   └─ Parsear las filas y deduplicar entre periodos → 25 repos
+      └─ Claude elige los 8 más relevantes y explica cada uno
+         └─ Enviar a Telegram
 ```
 
-**GitHub no publica una API de "trending".** La página `github.com/trending` es
-HTML, y aquí no se raspa HTML a propósito (mismo motivo por el que las noticias
-salen de RSS). Se usa la API de búsqueda oficial, que sí es estable, con dos
-ventanas complementarias — repos creados en los últimos 30 días con ≥100
-estrellas, y de los últimos 180 días con ≥1000 — y la velocidad se calcula aquí:
+**Aquí sí se raspa HTML, y es a propósito.** GitHub no publica ninguna interfaz
+de máquina para trending: ni RSS, ni API, ni feed. La página es la única fuente
+del dato. Eso la hace distinta del caso de las noticias, donde la regla de "nada
+de scraping" existe porque los medios *sí* publican RSS y raspar sería elegir la
+opción frágil pudiendo usar la buena.
 
-```
-estrellas_dia = estrellas / días desde la creación
-```
+La ventaja de leer la página es que el número lo pone GitHub: **"1,234 stars
+today"** son las estrellas ganadas hoy, de verdad. Aquí no se calcula ninguna
+velocidad ni se reordena nada — se respeta el orden en que GitHub lista los
+repos, que ya es su ranking de tendencia, y las cifras se muestran tal cual.
 
-Es un **promedio desde el día cero**, no las estrellas ganadas esta semana: la
-API no expone el histórico de estrellas. Para repos jóvenes, que son justo los
-que buscamos, el promedio y la velocidad actual se parecen bastante; un repo de
-2015 con 50.000 estrellas queda con un promedio bajo y no aparece.
+El precio es la fragilidad: si GitHub cambia el marcado, el parseo se rompe.
+Está mitigado así:
 
-Los números que ves en el mensaje (estrellas, ritmo, lenguaje) **salen siempre
-de la búsqueda, nunca de la respuesta del modelo** — Claude sólo aporta texto.
-Si devuelve un repo que no estaba entre los candidatos, se descarta con un aviso
-en el log. Así no hay forma de que llegue una cifra inventada.
+- **Anclado en lo semántico, no en el CSS.** Se busca el enlace a `/stargazers`
+  (que da nombre y total de una), `itemprop="programmingLanguage"` y el texto
+  literal `stars today`. Las clases como `Box-row` o `col-9 color-fg-muted`
+  cambian en cada rediseño; esas anclas no.
+- **Fallar en silencio no es una opción.** Trending siempre trae filas, así que
+  si el parseo saca cero repos no es "un día tranquilo": se levanta un error que
+  dice explícitamente que hay que revisar `parsear()`.
+- **El log dice qué se rompió.** El diagnóstico cuenta filas vistas, cuántas sin
+  nombre, cuántas sin contador y cuántas salieron bien, por periodo.
+
+Los números del mensaje **salen siempre de la página, nunca del modelo** —
+Claude sólo aporta texto. Si devuelve un repo que no estaba entre los
+candidatos, se descarta con un aviso.
 
 Esta sección **no tiene equivalente en n8n**: sólo existe en la versión de Actions.
 
@@ -183,9 +190,9 @@ conviene ejecutar tras tocar `repos.py`.
   lo que se pudo enviar ya salió. La marca de "ya enviado" se escribe si al menos
   una sección llegó a Telegram, así que un reintento no duplica la que sí salió.
 
-- **`GITHUB_TOKEN` no hay que configurarlo.** Actions lo inyecta solo; sólo sirve
-  para subir el límite de la API de búsqueda de 10 a 30 peticiones por minuto.
-  El script funciona sin él (usa 2 peticiones por ejecución).
+- **La sección de repos no necesita ninguna credencial.** Lee una página pública
+  con dos peticiones por ejecución. Lo único que puede tumbarla es que GitHub
+  cambie el marcado, y en ese caso lo dice en el log en vez de callarse.
 
 - **El filtrado emite el mismo `diagnostico`** que el nodo Code
   (`{total, sinLink, sinFecha, fueraDeRango, sinHost, ok}`), en el log del job,
@@ -248,6 +255,10 @@ Cada día 11:00 (Europe/Madrid)
 
 **Nada de scraping de HTML.** Los medios publican RSS justamente para esto: es estable y no se
 rompe cuando cambian el CSS. Las fuentes (con su peso en el ranking) son:
+
+(Esto vale **para las fuentes de noticias**, y el motivo es que existe una alternativa mejor. Donde
+no la hay —github.com/trending no tiene ni RSS ni API— sí se raspa: ver
+[Sección 2](#sección-2-repos-en-tendencia).)
 
 | Fuente | Peso | Fuente | Peso |
 |---|---|---|---|

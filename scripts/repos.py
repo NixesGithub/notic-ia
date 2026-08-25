@@ -1,167 +1,194 @@
-"""Repositorios de GitHub que están ganando estrellas rápido, explicados.
+"""Repos en tendencia, leídos de github.com/trending.
 
-GitHub no publica una API de "trending": la página github.com/trending es HTML,
-y este proyecto no raspa HTML a propósito. Se usa la API de búsqueda oficial,
-que sí es estable, y la velocidad se calcula aquí:
+GitHub **no publica** ninguna interfaz de máquina para trending: ni RSS, ni API,
+ni feed. La única fuente del dato es la página HTML, así que aquí sí se raspa.
+(La regla de "nada de scraping" del README es sobre las fuentes de noticias, y
+su motivo es que los medios sí publican RSS: elegir HTML pudiendo usar el feed
+sería quedarse con la opción frágil. Aquí no hay alternativa que elegir.)
 
-    estrellas_dia = estrellas / días desde la creación
+El número que se publica es **el que da GitHub** — "1,234 stars today" — y se
+muestra tal cual. Este módulo no calcula ninguna velocidad ni reordena nada: se
+respeta el orden en que GitHub lista los repos, que ya es su ranking de
+tendencia.
 
-Es un promedio desde el día cero, no las estrellas ganadas esta semana — la API
-no expone el histórico de estrellas. Para repos jóvenes, que son los que buscamos,
-el promedio y la velocidad actual se parecen bastante; un repo de 2015 con 50.000
-estrellas queda con un promedio bajo y no aparece, que es justo lo que queremos.
+Al ser HTML, esto se rompe si GitHub cambia el marcado. Está anclado en lo más
+estable que tiene la página (el enlace a /stargazers, itemprop y el texto
+"stars today") en vez de en clases CSS, y si el parseo no saca ni un repo se
+levanta un error en vez de aparentar que fue un día tranquilo.
 """
 
 from __future__ import annotations
 
+import html
 import json
-import os
+import re
 import urllib.error
-import urllib.parse
 import urllib.request
-from datetime import datetime, timedelta, timezone
 
-from comun import (
-    AGENTE,
-    MODELO,
-    ZONA,
-    escapar,
-    extraer_datos,
-    llamar_claude,
-    log,
-    registrar_uso,
-)
+from comun import MODELO, escapar, extraer_datos, limpiar_html, llamar_claude, log, registrar_uso
 
-# Dos ventanas complementarias: lo que acaba de explotar y lo que lleva unos
-# meses subiendo fuerte. Se deduplica por nombre.
-CONSULTAS = [
-    {"etiqueta": "nuevos", "dias": 30, "estrellas_min": 100},
-    {"etiqueta": "recientes", "dias": 180, "estrellas_min": 1000},
-]
+URL_TRENDING = "https://github.com/trending"
 
-# Un repo sin commits recientes no es una tendencia, es un pico que ya pasó.
-DIAS_SIN_ACTIVIDAD = 21
+# daily es la señal más afilada; weekly da algo de contexto para repos que suben
+# sostenidamente sin picos. Se deduplica y daily manda.
+PERIODOS = [("daily", "hoy"), ("weekly", "esta semana")]
 
 MAX_CANDIDATOS = 25
 MAX_ELEGIDOS = 8
 
+# Un navegador cualquiera: con el User-Agent por defecto de urllib, GitHub responde 403.
+CABECERAS = {
+    "User-Agent": (
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/125.0 Safari/537.36"
+    ),
+    "Accept": "text/html,application/xhtml+xml",
+    # El texto "stars today" que buscamos es inglés: no dejamos que se localice.
+    "Accept-Language": "en-US,en;q=0.9",
+}
 
-def _formatear_estrellas(n: int) -> str:
+# Anclas semánticas, no clases CSS. El enlace a /stargazers da de una el nombre
+# del repo y su total de estrellas.
+RE_STARGAZERS = re.compile(r'href="/([^"/]+)/([^"/]+)/stargazers"[^>]*>\s*([\d.,]+)\s*<', re.I)
+RE_NOMBRE_H2 = re.compile(r"<h2[^>]*>.*?href=\"/([^\"/]+)/([^\"/]+)\"", re.S | re.I)
+RE_GANADAS = re.compile(r"([\d.,]+)\s*stars?\s+(today|this week|this month)", re.I)
+RE_LENGUAJE = re.compile(r'itemprop="programmingLanguage"[^>]*>\s*([^<]+?)\s*<', re.I)
+# El \b es imprescindible: sin él "<p[^>]*>" matchea "<path ...>" del <svg>
+# que GitHub mete en el título, y la descripción se come medio artículo.
+RE_DESCRIPCION = re.compile(r"<p\b[^>]*>(.*?)</p>", re.S | re.I)
+
+
+def _texto(fragmento: str) -> str:
+    """Quita etiquetas y DESPUÉS decodifica entidades.
+
+    El orden importa: al revés, un "&lt;script&gt;" se convertiría en etiqueta y
+    el limpiador se llevaría el texto por delante. Con RSS esto no hacía falta
+    porque feedparser ya entrega las entidades decodificadas.
+    """
+    return html.unescape(limpiar_html(fragmento))
+
+
+def _entero(texto: str) -> int:
+    """'1,234' -> 1234. GitHub separa millares con coma en inglés."""
+    digitos = re.sub(r"[^\d]", "", texto or "")
+    return int(digitos) if digitos else 0
+
+
+def _formatear(n: int) -> str:
     if n >= 1000:
         return f"{n / 1000:.1f}k".replace(".", ",")
     return str(n)
 
 
-def _fecha_github(valor: str | None) -> datetime | None:
-    if not valor:
-        return None
-    try:
-        return datetime.fromisoformat(valor.replace("Z", "+00:00"))
-    except ValueError:
-        return None
-
-
 # --------------------------------------------------------------------------
-# 1. Búsqueda
+# 1. Descarga y parseo
 # --------------------------------------------------------------------------
 
-def _buscar(consulta: str, token: str, por_pagina: int = 50) -> list[dict]:
-    url = (
-        "https://api.github.com/search/repositories?"
-        + urllib.parse.urlencode({
-            "q": consulta,
-            "sort": "stars",
-            "order": "desc",
-            "per_page": por_pagina,
-        })
+def _descargar(periodo: str) -> str:
+    peticion = urllib.request.Request(
+        f"{URL_TRENDING}?since={periodo}", headers=CABECERAS
     )
-    cabeceras = {
-        "Accept": "application/vnd.github+json",
-        "X-GitHub-Api-Version": "2022-11-28",
-        "User-Agent": AGENTE,
-    }
-    # Sin token la búsqueda son 10 peticiones/minuto; con él, 30. En Actions
-    # GITHUB_TOKEN viene dado, así que normalmente hay token.
-    if token:
-        cabeceras["Authorization"] = f"Bearer {token}"
-
-    peticion = urllib.request.Request(url, headers=cabeceras)
     with urllib.request.urlopen(peticion, timeout=60) as respuesta:
-        datos = json.loads(respuesta.read().decode("utf-8"))
-    return datos.get("items") or []
+        return respuesta.read().decode("utf-8", "replace")
 
 
-def obtener_candidatos(token: str = "") -> tuple[list[dict], dict]:
-    """Busca, filtra y rankea por estrellas/día. Devuelve (candidatos, diagnostico)."""
-    ahora = datetime.now(timezone.utc)
+def parsear(html: str) -> tuple[list[dict], dict]:
+    """Saca un repo por cada <article> de la página. Devuelve (repos, diagnostico)."""
+    diag = {"articulos": 0, "sinNombre": 0, "sinGanadas": 0, "ok": 0}
+    encontrados: list[dict] = []
+
+    # Cada fila de la lista es un <article>. Se parte por ahí en vez de intentar
+    # una expresión que abarque toda la página.
+    for trozo in re.split(r"<article\b", html, flags=re.I)[1:]:
+        fin = re.search(r"</article>", trozo, re.I)
+        if fin:
+            trozo = trozo[: fin.start()]
+        diag["articulos"] += 1
+
+        estrellas_total = 0
+        coincidencia = RE_STARGAZERS.search(trozo)
+        if coincidencia:
+            duenio, repo, total = coincidencia.groups()
+            estrellas_total = _entero(total)
+        else:
+            # El enlace de stargazers es la vía principal; el <h2> es el respaldo.
+            coincidencia = RE_NOMBRE_H2.search(trozo)
+            if not coincidencia:
+                diag["sinNombre"] += 1
+                continue
+            duenio, repo = coincidencia.groups()
+
+        nombre = f"{duenio}/{repo}"
+
+        ganadas, periodo_texto = 0, ""
+        coincidencia = RE_GANADAS.search(trozo)
+        if coincidencia:
+            ganadas = _entero(coincidencia.group(1))
+            periodo_texto = coincidencia.group(2).lower()
+        else:
+            diag["sinGanadas"] += 1
+
+        lenguaje = ""
+        coincidencia = RE_LENGUAJE.search(trozo)
+        if coincidencia:
+            lenguaje = _texto(coincidencia.group(1))
+
+        descripcion = ""
+        coincidencia = RE_DESCRIPCION.search(trozo)
+        if coincidencia:
+            descripcion = _texto(coincidencia.group(1))
+
+        diag["ok"] += 1
+        encontrados.append({
+            "nombre": nombre,
+            "url": f"https://github.com/{nombre}",
+            "descripcion": descripcion,
+            "lenguaje": lenguaje,
+            "estrellas": estrellas_total,
+            "ganadas": ganadas,
+            "periodo_en": periodo_texto,
+        })
+
+    return encontrados, diag
+
+
+def obtener_candidatos() -> tuple[list[dict], dict]:
+    """Lee las páginas de trending. Conserva el orden de GitHub: es su ranking."""
     por_nombre: dict[str, dict] = {}
-    diag = {
-        "devueltos": 0, "fork": 0, "archivado": 0,
-        "inactivo": 0, "sinFecha": 0, "ok": 0, "consultasFallidas": 0,
-    }
+    orden: list[str] = []
+    diag = {"paginas": {}, "fallos": 0}
 
-    for consulta in CONSULTAS:
-        desde = (ahora - timedelta(days=consulta["dias"])).date().isoformat()
-        q = f"created:>={desde} stars:>={consulta['estrellas_min']}"
+    for periodo, etiqueta in PERIODOS:
         try:
-            items = _buscar(q, token)
+            html = _descargar(periodo)
         except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError) as exc:
-            detalle = exc.read().decode("utf-8", "replace")[:200] if hasattr(exc, "read") else exc
-            log(f"  AVISO búsqueda '{consulta['etiqueta']}' falló -> {detalle}")
-            diag["consultasFallidas"] += 1
+            log(f"  AVISO no se pudo leer trending '{periodo}' -> {exc}")
+            diag["fallos"] += 1
             continue
 
-        log(f"  {consulta['etiqueta']}: {len(items)} repos ({q})")
-        diag["devueltos"] += len(items)
+        encontrados, diag_pagina = parsear(html)
+        diag["paginas"][periodo] = diag_pagina
+        log(f"  {periodo}: {diag_pagina['ok']} repos de {diag_pagina['articulos']} filas")
 
-        for repo in items:
-            nombre = repo.get("full_name")
-            if not nombre or nombre in por_nombre:
-                continue
-            if repo.get("fork"):
-                diag["fork"] += 1
-                continue
-            if repo.get("archived"):
-                diag["archivado"] += 1
-                continue
+        for repo in encontrados:
+            if repo["nombre"] in por_nombre:
+                continue  # daily va primero, así que gana daily
+            repo["periodo"] = etiqueta
+            por_nombre[repo["nombre"]] = repo
+            orden.append(repo["nombre"])
 
-            creado = _fecha_github(repo.get("created_at"))
-            empujado = _fecha_github(repo.get("pushed_at"))
-            if creado is None:
-                diag["sinFecha"] += 1
-                continue
-            if empujado and (ahora - empujado).days > DIAS_SIN_ACTIVIDAD:
-                diag["inactivo"] += 1
-                continue
-
-            estrellas = repo.get("stargazers_count") or 0
-            edad_dias = max((ahora - creado).days, 1)
-            diag["ok"] += 1
-
-            por_nombre[nombre] = {
-                "nombre": nombre,
-                "url": repo.get("html_url") or f"https://github.com/{nombre}",
-                "descripcion": (repo.get("description") or "").strip(),
-                "lenguaje": repo.get("language") or "",
-                "temas": (repo.get("topics") or [])[:6],
-                "estrellas": estrellas,
-                "edad_dias": edad_dias,
-                "estrellas_dia": round(estrellas / edad_dias, 1),
-            }
-
-    candidatos = sorted(
-        por_nombre.values(), key=lambda r: r["estrellas_dia"], reverse=True
-    )[:MAX_CANDIDATOS]
+    candidatos = [por_nombre[n] for n in orden][:MAX_CANDIDATOS]
     return candidatos, diag
 
 
 # --------------------------------------------------------------------------
-# 2. Resumen con Claude
+# 2. Explicación con Claude
 # --------------------------------------------------------------------------
 
 SYSTEM = "\n".join([
     "Eres un analista que prepara un briefing diario para un desarrollador de software.",
-    "Recibes repositorios de GitHub que están ganando estrellas rápido, con su descripción y su lenguaje.",
+    "Recibes la lista de repositorios en tendencia de GitHub, en el orden en que GitHub los publica,",
+    "con las estrellas que ha ganado cada uno y su descripción.",
     "",
     f"Tu tarea: elegir los {MAX_ELEGIDOS} MÁS relevantes y explicar cada uno.",
     "",
@@ -185,7 +212,7 @@ SYSTEM = "\n".join([
     "- Si hay menos candidatos con valor real, devuelve menos. No rellenes.",
     '- "resumen_global": una frase sobre hacia dónde apunta lo que está subiendo.',
     "",
-    "NO inventes números de estrellas ni fechas: no te los pedimos y se añaden después.",
+    "NO inventes números de estrellas: no te los pedimos y se añaden después.",
 ])
 
 ESQUEMA = {
@@ -216,9 +243,8 @@ def construir_body(candidatos: list[dict]) -> dict:
     listado = "\n\n".join(
         "\n".join(filter(None, [
             f"[{i + 1}] {c['nombre']}",
-            f"    lenguaje: {c['lenguaje'] or 'n/d'} | estrellas: {c['estrellas']} "
-            f"| ritmo: {c['estrellas_dia']}/día | edad: {c['edad_dias']} días",
-            f"    temas: {', '.join(c['temas'])}" if c["temas"] else None,
+            f"    lenguaje: {c['lenguaje'] or 'n/d'} | estrellas totales: {c['estrellas'] or 'n/d'}"
+            f" | ganadas {c['periodo']}: {c['ganadas'] or 'n/d'}",
             f"    descripcion: {c['descripcion']}" if c["descripcion"] else "    descripcion: (sin descripción)",
         ]))
         for i, c in enumerate(candidatos)
@@ -229,7 +255,7 @@ def construir_body(candidatos: list[dict]) -> dict:
         "max_tokens": 16000,
         "system": SYSTEM,
         "messages": [
-            {"role": "user", "content": f"Repositorios candidatos:\n\n{listado}"}
+            {"role": "user", "content": f"Repositorios en tendencia:\n\n{listado}"}
         ],
         "output_config": {"format": {"type": "json_schema", "schema": ESQUEMA}},
     }
@@ -240,10 +266,9 @@ def construir_body(candidatos: list[dict]) -> dict:
 # --------------------------------------------------------------------------
 
 def formatear_bloques(datos: dict, candidatos: list[dict], fecha_texto: str) -> list[str]:
-    """Une lo que dijo Claude con los números reales, que salen de la búsqueda.
+    """Une el texto de Claude con las cifras de GitHub.
 
-    Los datos duros (estrellas, ritmo) se toman SIEMPRE de `candidatos`, nunca de
-    la respuesta del modelo: así no hay forma de que aparezca una cifra inventada.
+    Las cifras salen SIEMPRE de `candidatos`, nunca de la respuesta del modelo.
     """
     por_nombre = {c["nombre"]: c for c in candidatos}
 
@@ -254,31 +279,40 @@ def formatear_bloques(datos: dict, candidatos: list[dict], fecha_texto: str) -> 
 
     i = 0
     for elegido in datos.get("repos") or []:
-        datos_reales = por_nombre.get(elegido.get("nombre"))
-        if not datos_reales:
+        real = por_nombre.get(elegido.get("nombre"))
+        if not real:
             log(f"  AVISO el modelo devolvió '{elegido.get('nombre')}', que no era candidato: se descarta")
             continue
 
         i += 1
-        estrellas = _formatear_estrellas(datos_reales["estrellas"])
-        bloques.append("\n".join([
-            f"<b>{i}. {escapar(datos_reales['nombre'])}</b>"
-            f" · {escapar(elegido.get('categoria'))}",
-            f"⭐ {estrellas} · {datos_reales['estrellas_dia']}/día"
-            + (f" · {escapar(datos_reales['lenguaje'])}" if datos_reales["lenguaje"] else ""),
+        cifras = []
+        if real["ganadas"]:
+            cifras.append(f"+{_formatear(real['ganadas'])} ⭐ {escapar(real['periodo'])}")
+        if real["estrellas"]:
+            cifras.append(f"{_formatear(real['estrellas'])} en total")
+        if real["lenguaje"]:
+            cifras.append(escapar(real["lenguaje"]))
+
+        bloques.append("\n".join(filter(None, [
+            f"<b>{i}. {escapar(real['nombre'])}</b> · {escapar(elegido.get('categoria'))}",
+            " · ".join(cifras) if cifras else None,
             "",
             f"<b>Para qué sirve:</b> {escapar(elegido.get('para_que_sirve'))}",
             f"<b>Por qué sube:</b> {escapar(elegido.get('por_que_sube'))}",
-            f"<a href=\"{escapar(datos_reales['url'])}\">Ver en GitHub</a>",
-        ]))
+            f"<a href=\"{escapar(real['url'])}\">Ver en GitHub</a>",
+        ])))
 
     if i == 0:
-        return [
-            f"<b>🚀 Repos en tendencia — {escapar(fecha_texto)}</b>\n\n"
-            "No se encontraron repositorios destacables con los criterios actuales."
-        ]
+        return [sin_repos(fecha_texto)]
 
     return bloques
+
+
+def sin_repos(fecha_texto: str) -> str:
+    return (
+        f"<b>🚀 Repos en tendencia — {escapar(fecha_texto)}</b>\n\n"
+        "No se encontraron repositorios destacables hoy."
+    )
 
 
 # --------------------------------------------------------------------------
@@ -286,29 +320,26 @@ def formatear_bloques(datos: dict, candidatos: list[dict], fecha_texto: str) -> 
 # --------------------------------------------------------------------------
 
 def generar(fecha_texto: str, api_key: str, solo_candidatos: bool = False) -> list[str]:
-    """Devuelve los bloques de Telegram de la sección de repos."""
-    token = os.environ.get("GITHUB_TOKEN", "")
-    log("Buscando repos en tendencia..." + ("" if token else " (sin GITHUB_TOKEN: límite más bajo)"))
+    log("Leyendo github.com/trending...")
+    candidatos, diag = obtener_candidatos()
+    log(f"Diagnóstico trending: {json.dumps(diag)}")
+    log(f"Candidatos: {len(candidatos)}")
 
-    candidatos, diag = obtener_candidatos(token)
-    log(f"Filtrado repos: {json.dumps(diag)}")
-    log(f"Candidatos seleccionados: {len(candidatos)}")
-
-    # Antes de cualquier atajo: si no respondió ninguna consulta es un fallo real,
-    # y tiene que verse también en --dry-run.
-    if diag["consultasFallidas"] == len(CONSULTAS):
-        raise RuntimeError("Todas las búsquedas de GitHub fallaron: ninguna consulta respondió.")
+    # Sin candidatos no es "un día tranquilo": trending siempre tiene 25 filas.
+    # O no se pudo descargar, o cambió el marcado de la página.
+    if not candidatos:
+        if diag["fallos"] == len(PERIODOS):
+            raise RuntimeError("No se pudo descargar github.com/trending en ningún periodo.")
+        raise RuntimeError(
+            "Se descargó github.com/trending pero no se pudo extraer ni un repo: "
+            "seguramente cambió el marcado de la página. Revisá parsear() en scripts/repos.py."
+        )
 
     if solo_candidatos:
         for i, c in enumerate(candidatos[:15], start=1):
-            log(f"  [{i}] {c['estrellas_dia']:>7}/día  ⭐{c['estrellas']:<7} {c['nombre']} — {c['descripcion'][:60]}")
+            log(f"  [{i}] +{c['ganadas']} ⭐ {c['periodo']:<12} (total {c['estrellas']:>7}) "
+                f"{c['nombre']} — {c['descripcion'][:55]}")
         return []
-
-    if not candidatos:
-        return [
-            f"<b>🚀 Repos en tendencia — {escapar(fecha_texto)}</b>\n\n"
-            "No se encontraron repositorios destacables con los criterios actuales."
-        ]
 
     log(f"Explicando con {MODELO}...")
     respuesta = llamar_claude(construir_body(candidatos), api_key)
