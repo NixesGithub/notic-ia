@@ -3,8 +3,22 @@
 A custom newspaper every morning with news of my preference.
 
 
-Instancia local de [n8n](https://n8n.io) levantada con Docker Compose, que importa
-automáticamente sus workflows al arrancar.
+Hay **dos formas de ejecutar el digest diario**, con la misma lógica en las dos:
+
+| | Dónde corre | Cuándo | Depende del portátil |
+|---|---|---|---|
+| **GitHub Actions** | Runners de GitHub | 09:00 hora de Madrid | No |
+| **n8n local** | Docker en tu máquina | 11:00 hora de Madrid | Sí |
+
+La de GitHub Actions es la que no se salta días: n8n no recupera los triggers de
+schedule que se pierde, así que con el equipo apagado o suspendido a las 11:00 no
+hay digest. Está en [`.github/workflows/noticias-ia.yml`](.github/workflows/noticias-ia.yml)
+y se documenta [más abajo](#digest-en-github-actions).
+
+El resto de este README es la instancia local de [n8n](https://n8n.io) levantada
+con Docker Compose, que importa automáticamente sus workflows al arrancar. Sigue
+siendo el sitio cómodo para *editar* el pipeline: los nodos se tocan en la UI y
+se ve el resultado paso a paso.
 
 | Workflow | Qué hace |
 |---|---|
@@ -15,13 +29,20 @@ automáticamente sus workflows al arrancar.
 ## Estructura
 
 ```
-n8n-mvp/
-├── docker-compose.yml      # servicio n8n + servicio de importación de workflows
-├── .env                    # clave de cifrado, puerto, zona horaria, chat de Telegram
-├── .env.example            # plantilla de .env
+notic-ia/
+├── docker-compose.yml          # servicio n8n + servicio de importación de workflows
+├── .env                        # clave de cifrado, puerto, zona horaria, chat de Telegram
+├── .env.example                # plantilla de .env
+├── requirements.txt            # dependencias de la versión de GitHub Actions
+├── .github/workflows/
+│   └── noticias-ia.yml         # el cron de las 9:00 y el job
+├── scripts/
+│   └── noticias_ia.py          # el pipeline, para correr fuera de n8n
 └── workflows/
     ├── hola-mundo.json
-    └── noticias-ia.json
+    ├── test-telegram.json
+    ├── noticias-ia.json
+    └── noticias-ia-now.json
 ```
 
 ## Levantar
@@ -32,6 +53,95 @@ docker compose up -d
 
 Abrí http://localhost:5678. La primera vez n8n pide crear una cuenta de **owner**
 (email + contraseña); son locales, no se envían a ningún lado.
+
+---
+
+# Digest en GitHub Actions
+
+La misma tubería que `noticias-ia.json`, pero en Python y ejecutada por GitHub
+todos los días a las **9:00 hora de Madrid**. No hace falta que haya ningún
+ordenador encendido.
+
+```
+09:00 Europe/Madrid (GitHub Actions)
+   └─ 9 fuentes RSS (~280 noticias)
+      └─ Filtrar por el día anterior, deduplicar entre medios y rankear → top 40
+         └─ Resumir con Claude (salida JSON validada contra esquema) → top 10
+            └─ Enviar a Telegram (HTML, troceado a 3800 caracteres)
+```
+
+Las fuentes y sus pesos, la normalización de títulos, la fórmula de puntuación,
+el prompt, el esquema de salida y el formato del mensaje son **los mismos** que
+los de los nodos Code del workflow. Son dos implementaciones de lo mismo: si
+tocás una, tocá la otra.
+
+## Configuración
+
+Tres secretos en **Settings → Secrets and variables → Actions**:
+
+| Secreto | De dónde sale |
+|---|---|
+| `ANTHROPIC_API_KEY` | https://console.anthropic.com → *API Keys* |
+| `TELEGRAM_BOT_TOKEN` | El token que da **@BotFather** con `/newbot` — el mismo de la credencial de n8n |
+| `TELEGRAM_CHAT_ID` | El mismo número que hay en `.env` |
+
+Ojo con el segundo: en n8n el token del bot vive **dentro de la credencial de
+Telegram**, no en `.env`. Aquí los tres son secretos del repo.
+
+## Probarlo sin esperar a mañana
+
+Desde **Actions → Noticias IA diarias → Run workflow**. La ejecución manual se
+salta la comprobación de hora y tiene dos opciones:
+
+- **ventana**: `ultimas24h` (por defecto en manual) mira las últimas 24 h desde
+  este momento — el equivalente de `noticias-ia-now.json`; `ayer` reproduce
+  exactamente lo que haría el cron.
+- **dry_run**: lista los candidatos y termina, sin gastar API de Anthropic ni
+  mandar nada a Telegram. El equivalente barato de *Test Telegram*.
+
+En local, sin Docker ni n8n:
+
+```bash
+pip install -r requirements.txt
+python scripts/noticias_ia.py --dry-run --force              # sólo ver candidatos
+python scripts/noticias_ia.py --force --ventana ultimas24h   # envío real
+```
+
+`--force` salta la comprobación de hora; sin él, el script sólo actúa si son las
+9:00 en la zona configurada.
+
+## Cosas que conviene saber
+
+- **El cron de GitHub Actions sólo entiende UTC, y Madrid cambia con el horario
+  de verano.** Un cron fijo daría las 9:00 media parte del año y las 8:00 o las
+  10:00 la otra. Por eso el workflow dispara a **las 07:00 y las 08:00 UTC** y es
+  el script el que comprueba si son las 9 en `Europe/Madrid`; la ejecución que no
+  toca sale sin hacer nada. Si cambiás `DIGEST_TZ` o `DIGEST_HOUR` en el
+  workflow, acordate de mover también esas dos horas UTC del `cron`.
+
+- **GitHub no garantiza la puntualidad de los crons.** En horas punta la
+  ejecución puede retrasarse bastantes minutos. Como la comprobación es sobre la
+  *hora* y no sobre el minuto exacto, el digest sale igual. Si el retraso fuese
+  tan grande que las dos ejecuciones del día cayesen dentro de la hora del
+  digest, una marca guardada en la caché de Actions
+  (`noticias-ia-enviado-<fecha>`) evita que llegue por duplicado.
+
+- **Una fuente caída no tumba el digest.** Cada feed se lee por separado y los
+  fallos quedan como aviso en el log del job. Sí aborta si *ninguna* fuente
+  responde, que es un fallo real y no un día tranquilo.
+
+- **El filtrado emite el mismo `diagnostico`** que el nodo Code
+  (`{total, sinLink, sinFecha, fueraDeRango, sinHost, ok}`), en el log del job,
+  para que un colapso silencioso del filtrado se vea en vez de parecer que no
+  hubo noticias.
+
+- **GitHub desactiva los workflows programados en repos sin actividad durante 60
+  días.** Avisa por email; se reactivan desde la pestaña Actions.
+
+- **No actives las dos versiones a la vez contra el mismo chat.** Si el n8n local
+  está encendido a las 11:00 y el workflow corre a las 9:00, te llegan dos
+  digests del mismo día. Dejá activa una sola (en n8n, `"active": false` en
+  `noticias-ia.json`; en Actions, deshabilitando el workflow desde la UI).
 
 ---
 
@@ -202,8 +312,9 @@ El nodo *Seleccionar del día anterior* devuelve un campo `diagnostico` con el d
 ## Cosas que conviene saber
 
 - **Si el ordenador está apagado o suspendido a las 11:00, la ejecución no se recupera.** n8n no
-  reintenta los triggers de schedule que se perdió. Para un digest que no se salte días necesitás
-  que la máquina esté encendida, o mover esto a un VPS.
+  reintenta los triggers de schedule que se perdió. Para eso está la versión de
+  [GitHub Actions](#digest-en-github-actions), que corre en los runners de GitHub y no depende de
+  que haya ninguna máquina encendida.
 - **Ejecutarlo a media tarde da menos resultados que a las 11:00.** Los feeds sólo guardan entre 10 y
   20 noticias: por la tarde ya están llenos de las de hoy y las de ayer se cayeron de la ventana. Por
   eso las URLs de Google News se generan con `after:`/`before:` acotando el día anterior — sin eso,

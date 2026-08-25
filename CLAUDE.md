@@ -8,6 +8,15 @@ A local [n8n](https://n8n.io) instance run with Docker Compose, where **workflow
 as JSON** under `workflows/` and are imported into n8n on every startup. There is no `package.json`,
 no build, and no test suite — the deliverable is the compose file plus the workflow JSONs.
 
+**The daily digest exists twice, on purpose.** `workflows/noticias-ia.json` runs it in local n8n at
+11:00; `.github/workflows/noticias-ia.yml` + `scripts/noticias_ia.py` run the same pipeline on
+GitHub's runners at 09:00 Europe/Madrid. The n8n copy only fires if this machine happens to be awake
+— n8n does not replay missed schedule triggers — so the Actions copy is the one that does not skip
+days, and the n8n UI is the comfortable place to *edit* the pipeline. The two share no code:
+**a change to the ranking, the prompt, the schema or the sources must be made in both**, or they
+drift. The Python port is a faithful translation of the Code nodes, down to the scoring formula and
+the dedupe key.
+
 Prose (README, comments, node names, UI strings) is written in **Spanish**, per the parent workspace
 convention. Keep it that way.
 
@@ -18,6 +27,20 @@ AI-news digest: 9 RSS feeds → dedupe/rank → Claude summarizes → Telegram),
 it reports *now* instead of yesterday).
 
 ## Commands
+
+The Actions version, which needs no Docker and no n8n:
+
+```bash
+pip install -r requirements.txt
+python scripts/noticias_ia.py --dry-run --force              # rank candidates, call nothing
+python scripts/noticias_ia.py --force --ventana ultimas24h   # real send, last 24 h
+```
+
+`--force` skips the "is it 09:00 in DIGEST_TZ?" guard; without it the script exits 0 doing nothing.
+`--dry-run` is the cheap way to verify a change to the filtering or the ranking: it prints the
+`diagnostico` counters and the top candidates without spending Anthropic credits.
+
+The n8n instance:
 
 ```bash
 docker compose up -d                              # start (re-imports workflows every time)
@@ -65,6 +88,12 @@ of escaping), the workflow is: **edit in the UI → export over `workflows/<name
 
 Credentials are *not* in the JSON — they live encrypted in the DB (keyed by `N8N_ENCRYPTION_KEY`),
 so re-importing never forces credential reconfiguration.
+
+**The GitHub Actions cron is UTC-only and Madrid observes DST.** A fixed cron would drift an hour
+for half the year, so the workflow fires at **07:00 and 08:00 UTC** and `noticias_ia.py` checks
+whether it is `DIGEST_HOUR` in `DIGEST_TZ`, exiting 0 on the run that does not match. Changing the
+timezone or the hour means changing *both* the env vars and the two UTC cron hours. A marker in the
+Actions cache (`noticias-ia-enviado-<date>`) stops a badly delayed runner from sending twice.
 
 ## Gotchas that cost real debugging time
 
