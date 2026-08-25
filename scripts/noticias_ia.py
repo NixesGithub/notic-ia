@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
-"""Resumen diario de noticias de IA: RSS -> deduplicar/rankear -> Claude -> Telegram.
+"""Digest diario por Telegram: noticias de IA + repos de GitHub en tendencia.
 
-Port de `workflows/noticias-ia.json` a un script autónomo, para poder ejecutarlo
-desde GitHub Actions en vez de depender de la instancia local de n8n (y por
-tanto de que el portátil esté encendido a la hora del digest).
+La sección de noticias es el port de `workflows/noticias-ia.json` a un script
+autónomo, para poder ejecutarlo desde GitHub Actions en vez de depender de la
+instancia local de n8n (y por tanto de que el portátil esté encendido a la hora
+del digest). Su lógica es la misma que la de los nodos Code del workflow:
+mismas fuentes y pesos, misma deduplicación, misma fórmula de puntuación, mismo
+prompt y mismo esquema de salida. Si cambiás una de las dos versiones, cambiá
+la otra.
 
-La lógica es la misma que la de los nodos Code del workflow: mismas fuentes y
-pesos, misma deduplicación, misma fórmula de puntuación, mismo prompt y mismo
-esquema de salida. Si cambiás una de las dos versiones, cambiá la otra.
+La sección de repos (scripts/repos.py) sólo existe aquí; no tiene equivalente
+en n8n.
 
 Variables de entorno:
   ANTHROPIC_API_KEY    obligatoria salvo en --dry-run
@@ -26,30 +29,29 @@ import os
 import pathlib
 import re
 import sys
-import time
-import unicodedata
-import urllib.error
-import urllib.parse
-import urllib.request
 from datetime import datetime, timedelta, timezone
-from zoneinfo import ZoneInfo
 
 import feedparser
 
-ZONA = ZoneInfo(os.environ.get("DIGEST_TZ", "Europe/Madrid"))
-HORA_DIGEST = int(os.environ.get("DIGEST_HOUR", "9"))
-MODELO = os.environ.get("DIGEST_MODEL", "claude-sonnet-5")
+import repos
+from comun import (
+    AGENTE,
+    HORA_DIGEST,
+    MODELO,
+    ZONA,
+    escapar,
+    enviar_telegram,
+    extraer_datos,
+    fecha_en_espanol,
+    limpiar_html,
+    llamar_claude,
+    log,
+    normalizar,
+    registrar_uso,
+    trocear,
+)
 
-# Muchos feeds rechazan el User-Agent por defecto de urllib con un 403.
-AGENTE = "Mozilla/5.0 (compatible; notic-ia/1.0; +https://github.com/NixesGithub/notic-ia)"
-
-LIMITE_TELEGRAM = 3800  # Telegram corta a 4096; dejamos margen.
 MAX_CANDIDATOS = 40
-
-MESES_ES = [
-    "enero", "febrero", "marzo", "abril", "mayo", "junio",
-    "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre",
-]
 
 # "peso" = fiabilidad/relevancia editorial de la fuente (se usa para rankear).
 PESOS = {
@@ -92,41 +94,12 @@ CLAVES = [
 ]
 
 
-def log(mensaje: str) -> None:
-    print(mensaje, flush=True)
-
-
-def normalizar(texto: str | None) -> str:
-    """Quita acentos y puntuación para poder comparar títulos entre fuentes."""
-    base = unicodedata.normalize("NFD", texto or "").lower()
-    base = "".join(c for c in base if unicodedata.category(c) != "Mn")
-    base = re.sub(r"[^a-z0-9 ]", " ", base)
-    return re.sub(r"\s+", " ", base).strip()
-
-
-def limpiar_html(texto: str | None) -> str:
-    return re.sub(r"\s+", " ", re.sub(r"<[^>]*>", "", texto or "")).strip()
-
-
-def escapar(texto) -> str:
-    """Telegram en modo HTML sólo permite unas pocas etiquetas: escapamos el resto."""
-    return (
-        str(texto if texto is not None else "")
-        .replace("&", "&amp;")
-        .replace("<", "&lt;")
-        .replace(">", "&gt;")
-    )
-
-
-def fecha_en_espanol(dia: datetime) -> str:
-    return f"{dia.day} de {MESES_ES[dia.month - 1]} de {dia.year}"
-
-
 # --------------------------------------------------------------------------
 # 1. Fuentes
 # --------------------------------------------------------------------------
 
 def url_google_news(consulta: str, idioma: str, pais: str, desde: str, hasta: str) -> str:
+    import urllib.parse
     q = urllib.parse.quote(f"{consulta} after:{desde} before:{hasta}")
     return (
         f"https://news.google.com/rss/search?q={q}"
@@ -183,7 +156,7 @@ def leer_feeds(fuentes: list[dict]) -> list[dict]:
         for fallo in fallos:
             log(f"  AVISO fuente no leída -> {fallo}")
     if not entradas:
-        raise SystemExit("Ninguna fuente devolvió entradas: no hay nada que resumir.")
+        raise RuntimeError("Ninguna fuente devolvió entradas: no hay nada que resumir.")
 
     return entradas
 
@@ -361,69 +334,11 @@ def construir_body(candidatos: list[dict], fecha_texto: str) -> dict:
     }
 
 
-def llamar_claude(body: dict, api_key: str, reintentos: int = 3) -> dict:
-    datos = json.dumps(body).encode("utf-8")
-    ultimo_error = ""
-
-    for intento in range(1, reintentos + 1):
-        peticion = urllib.request.Request(
-            "https://api.anthropic.com/v1/messages",
-            data=datos,
-            method="POST",
-            headers={
-                "content-type": "application/json",
-                "x-api-key": api_key,
-                # La credencial sólo inyecta x-api-key: la versión va aparte.
-                "anthropic-version": "2023-06-01",
-            },
-        )
-        try:
-            with urllib.request.urlopen(peticion, timeout=300) as respuesta:
-                return json.loads(respuesta.read().decode("utf-8"))
-        except urllib.error.HTTPError as exc:
-            cuerpo = exc.read().decode("utf-8", "replace")[:500]
-            ultimo_error = f"HTTP {exc.code}: {cuerpo}"
-            # 4xx que no sea rate limit es un fallo nuestro: no insistimos.
-            if exc.code != 429 and exc.code < 500:
-                break
-        except (urllib.error.URLError, TimeoutError) as exc:
-            ultimo_error = str(exc)
-
-        if intento < reintentos:
-            espera = 2 ** intento
-            log(f"  reintento {intento}/{reintentos - 1} en {espera}s ({ultimo_error})")
-            time.sleep(espera)
-
-    raise RuntimeError(f"La API de Anthropic falló: {ultimo_error}")
-
-
-def extraer_datos(respuesta: dict) -> dict:
-    if respuesta.get("stop_reason") == "refusal":
-        detalle = (respuesta.get("stop_details") or {}).get("explanation", "sin detalle")
-        raise RuntimeError(f"Anthropic rechazó la petición: {detalle}")
-
-    bloque = next((b for b in respuesta.get("content", []) if b.get("type") == "text"), None)
-    if not bloque:
-        raise RuntimeError(
-            "La respuesta no contiene ningún bloque de texto: "
-            + json.dumps(respuesta)[:500]
-        )
-
-    texto = bloque["text"].strip()
-    if texto.startswith("```"):  # por si el modelo envuelve el JSON en un fence
-        texto = re.sub(r"^```(?:json)?\s*|\s*```$", "", texto)
-
-    try:
-        return json.loads(texto)
-    except json.JSONDecodeError as exc:
-        raise RuntimeError(f"La respuesta no es JSON válido: {texto[:500]}") from exc
-
-
 # --------------------------------------------------------------------------
-# 5. Mensajes de Telegram
+# 5. Mensaje
 # --------------------------------------------------------------------------
 
-def formatear_mensajes(datos: dict, fecha_texto: str) -> list[str]:
+def formatear_bloques(datos: dict, fecha_texto: str) -> list[str]:
     bloques = [
         f"<b>🤖 Noticias IA — {escapar(fecha_texto)}</b>\n\n"
         f"<i>{escapar(datos.get('resumen_global'))}</i>"
@@ -437,53 +352,40 @@ def formatear_mensajes(datos: dict, fecha_texto: str) -> list[str]:
             f" · importancia {escapar(n.get('importancia'))}/10",
         ]))
 
-    # Agrupamos bloques enteros sin partir una noticia por la mitad.
-    mensajes: list[str] = []
-    actual = ""
-    for bloque in bloques:
-        if actual and len(actual) + 2 + len(bloque) > LIMITE_TELEGRAM:
-            mensajes.append(actual)
-            actual = bloque
-        else:
-            actual = f"{actual}\n\n{bloque}" if actual else bloque
-    if actual:
-        mensajes.append(actual)
-
-    return mensajes
+    return bloques
 
 
-def mensaje_sin_noticias(fecha_texto: str) -> list[str]:
+def sin_noticias(fecha_texto: str) -> list[str]:
     return [
         f"<b>🤖 Noticias IA — {escapar(fecha_texto)}</b>\n\n"
         "No se encontraron noticias de IA publicadas ese día en las fuentes configuradas."
     ]
 
 
-def enviar_telegram(mensajes: list[str], token: str, chat_id: str) -> None:
-    for i, mensaje in enumerate(mensajes, start=1):
-        datos = json.dumps({
-            "chat_id": chat_id,
-            "text": mensaje,
-            "parse_mode": "HTML",
-            "disable_web_page_preview": True,
-        }).encode("utf-8")
+def generar_noticias(
+    desde: datetime, hasta: datetime, referencia: datetime,
+    fecha_texto: str, api_key: str, solo_candidatos: bool = False,
+) -> list[str]:
+    log("Leyendo fuentes RSS...")
+    entradas = leer_feeds(construir_fuentes(referencia))
 
-        peticion = urllib.request.Request(
-            f"https://api.telegram.org/bot{token}/sendMessage",
-            data=datos,
-            method="POST",
-            headers={"content-type": "application/json"},
-        )
-        try:
-            with urllib.request.urlopen(peticion, timeout=60) as respuesta:
-                respuesta.read()
-        except urllib.error.HTTPError as exc:
-            cuerpo = exc.read().decode("utf-8", "replace")[:300]
-            raise RuntimeError(f"Telegram devolvió HTTP {exc.code}: {cuerpo}") from exc
+    candidatos, diag = seleccionar(entradas, desde, hasta)
+    # diagnóstico explícito: un filtrado que colapsa a 0 parece "un día tranquilo".
+    log(f"Filtrado noticias: {json.dumps(diag)}")
+    log(f"Candidatos seleccionados: {len(candidatos)}")
 
-        log(f"  mensaje {i}/{len(mensajes)} enviado ({len(mensaje)} caracteres)")
-        if i < len(mensajes):
-            time.sleep(1)  # el límite de Telegram es ~30 mensajes/segundo
+    if solo_candidatos:
+        for i, c in enumerate(candidatos[:15], start=1):
+            log(f"  [{i}] ({c['score']}) {c['fuente']} — {c['titulo']}")
+        return []
+
+    if not candidatos:
+        return sin_noticias(fecha_texto)
+
+    log(f"Resumiendo con {MODELO}...")
+    respuesta = llamar_claude(construir_body(candidatos, fecha_texto), api_key)
+    registrar_uso(respuesta)
+    return formatear_bloques(extraer_datos(respuesta), fecha_texto)
 
 
 # --------------------------------------------------------------------------
@@ -503,10 +405,14 @@ def ventana(modo: str, ahora: datetime) -> tuple[datetime, datetime, datetime, s
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Digest diario de noticias de IA por Telegram.")
+    parser = argparse.ArgumentParser(description="Digest diario de IA por Telegram.")
     parser.add_argument(
         "--ventana", choices=["ayer", "ultimas24h"], default="ayer",
-        help="'ayer' (día natural anterior, el digest de las 9) o 'ultimas24h' (para probar a cualquier hora).",
+        help="'ayer' (día natural anterior, el digest de las 9) o 'ultimas24h' (para probar a cualquier hora). Sólo afecta a las noticias.",
+    )
+    parser.add_argument(
+        "--secciones", default="noticias,repos",
+        help="Qué enviar, separado por comas: noticias, repos. Por defecto ambas.",
     )
     parser.add_argument(
         "--force", action="store_true",
@@ -522,6 +428,12 @@ def main() -> int:
              "workflow para no repetir el envío si el cron se retrasa.",
     )
     args = parser.parse_args()
+
+    secciones = [s.strip() for s in args.secciones.split(",") if s.strip()]
+    desconocidas = [s for s in secciones if s not in ("noticias", "repos")]
+    if desconocidas or not secciones:
+        log(f"ERROR: secciones no válidas: {desconocidas or '(ninguna)'}. Usá 'noticias', 'repos' o ambas.")
+        return 1
 
     def marcar_enviado() -> None:
         if not args.marca:
@@ -544,64 +456,63 @@ def main() -> int:
         return 0
 
     desde, hasta, referencia, fecha_texto = ventana(args.ventana, ahora)
-    log(f"Digest de: {fecha_texto} ({ZONA.key})")
+    log(f"Digest de: {fecha_texto} ({ZONA.key}) | secciones: {', '.join(secciones)}")
 
-    log("Leyendo fuentes RSS...")
-    entradas = leer_feeds(construir_fuentes(referencia))
+    if not args.dry_run:
+        token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+        chat_id = os.environ.get("TELEGRAM_CHAT_ID", "")
+        api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+        faltan = [
+            nombre for nombre, valor in [
+                ("ANTHROPIC_API_KEY", api_key),
+                ("TELEGRAM_BOT_TOKEN", token),
+                ("TELEGRAM_CHAT_ID", chat_id),
+            ] if not valor
+        ]
+        if faltan:
+            log(f"ERROR: faltan variables de entorno: {', '.join(faltan)}")
+            return 1
+    else:
+        token = chat_id = api_key = ""
 
-    candidatos, diag = seleccionar(entradas, desde, hasta)
-    # diagnóstico explícito: un filtrado que colapsa a 0 parece "un día tranquilo".
-    log(f"Filtrado: {json.dumps(diag)}")
-    log(f"Candidatos seleccionados: {len(candidatos)}")
+    # Cada sección es independiente: que falle la de repos no puede dejarte sin
+    # noticias, ni al revés.
+    enviadas, fallidas = 0, []
+    for seccion in secciones:
+        log(f"--- {seccion} ---")
+        try:
+            if seccion == "noticias":
+                bloques = generar_noticias(
+                    desde, hasta, referencia, fecha_texto, api_key, args.dry_run
+                )
+            else:
+                bloques = repos.generar(fecha_texto, api_key, args.dry_run)
+
+            if args.dry_run or not bloques:
+                continue
+
+            mensajes = trocear(bloques)
+            log(f"Enviando {len(mensajes)} mensaje(s) a Telegram...")
+            enviar_telegram(mensajes, token, chat_id)
+            enviadas += 1
+        except (RuntimeError, OSError) as exc:
+            log(f"ERROR en la sección '{seccion}': {exc}")
+            fallidas.append(seccion)
 
     if args.dry_run:
-        for i, c in enumerate(candidatos[:15], start=1):
-            log(f"  [{i}] ({c['score']}) {c['fuente']} — {c['titulo']}")
-        log("--dry-run: no se llama a Anthropic ni a Telegram.")
-        return 0
+        log("--dry-run: no se llamó a Anthropic ni a Telegram.")
+        return 1 if fallidas else 0
 
-    token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
-    chat_id = os.environ.get("TELEGRAM_CHAT_ID", "")
-    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
-    faltan = [
-        nombre for nombre, valor in [
-            ("ANTHROPIC_API_KEY", api_key),
-            ("TELEGRAM_BOT_TOKEN", token),
-            ("TELEGRAM_CHAT_ID", chat_id),
-        ] if not valor
-    ]
-    if faltan:
-        log(f"ERROR: faltan variables de entorno: {', '.join(faltan)}")
+    if enviadas:
+        marcar_enviado()
+
+    if fallidas:
+        log(f"Terminado con fallos en: {', '.join(fallidas)}")
         return 1
 
-    if not candidatos:
-        log("Sin candidatos: aviso por Telegram y termino.")
-        enviar_telegram(mensaje_sin_noticias(fecha_texto), token, chat_id)
-        marcar_enviado()
-        return 0
-
-    log(f"Resumiendo con {MODELO}...")
-    respuesta = llamar_claude(construir_body(candidatos, fecha_texto), api_key)
-    uso = respuesta.get("usage", {})
-    log(
-        f"Tokens: entrada {uso.get('input_tokens', '?')} / "
-        f"salida {uso.get('output_tokens', '?')} | modelo {respuesta.get('model')}"
-    )
-
-    datos = extraer_datos(respuesta)
-    mensajes = formatear_mensajes(datos, fecha_texto)
-    log(f"Enviando {len(mensajes)} mensaje(s) a Telegram...")
-    enviar_telegram(mensajes, token, chat_id)
-    marcar_enviado()
     log("Listo.")
     return 0
 
 
 if __name__ == "__main__":
-    try:
-        sys.exit(main())
-    except (RuntimeError, SystemExit) as exc:
-        if isinstance(exc, SystemExit):
-            raise
-        log(f"ERROR: {exc}")
-        sys.exit(1)
+    sys.exit(main())

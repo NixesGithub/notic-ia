@@ -2,6 +2,8 @@ name: Noticias IA diarias
 
 # El digest sale todos los días a las 9:00 hora de Madrid, en los runners de
 # GitHub: no depende de que ningún ordenador esté encendido.
+# Dos secciones: noticias de IA del día anterior y repos de GitHub que están
+# ganando estrellas rápido, explicados.
 #
 # El cron de GitHub Actions sólo entiende UTC y Madrid cambia de offset con el
 # horario de verano, así que disparamos a las dos horas UTC posibles y es el
@@ -18,6 +20,14 @@ on:
         type: choice
         options: [ayer, ultimas24h]
         default: ultimas24h
+      secciones:
+        description: 'Qué enviar'
+        type: choice
+        options:
+          - noticias,repos
+          - noticias
+          - repos
+        default: noticias,repos
       dry_run:
         description: 'Sólo listar candidatos, sin llamar a Anthropic ni enviar a Telegram'
         type: boolean
@@ -74,6 +84,7 @@ jobs:
         run: |
           python scripts/noticias_ia.py \
             --ventana "${{ inputs.ventana || 'ayer' }}" \
+            --secciones "${{ inputs.secciones || 'noticias,repos' }}" \
             --marca .enviado/${{ steps.fecha.outputs.hoy }} \
             ${{ github.event_name == 'workflow_dispatch' && '--force' || '' }} \
             ${{ inputs.dry_run && '--dry-run' || '' }}

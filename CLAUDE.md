@@ -8,6 +8,35 @@ A local [n8n](https://n8n.io) instance run with Docker Compose, where **workflow
 as JSON** under `workflows/` and are imported into n8n on every startup. There is no `package.json`,
 no build, and no test suite — the deliverable is the compose file plus the workflow JSONs.
 
+**The Actions digest has two sections.** `scripts/noticias_ia.py` is the entry point and holds the
+AI-news section plus the orchestration (hour guard, section loop, Telegram send); `scripts/repos.py`
+holds the GitHub-trending section; `scripts/comun.py` holds what both need (Anthropic call, Telegram
+send, chunking, escaping, timezone). Sections are isolated — one raising does not stop the other, and
+the job exits non-zero if any failed *after* sending what worked. The repos section has **no n8n
+equivalent**; that drift is deliberate, not an oversight.
+
+`scripts/test_repos.py` is the only test in the repo: no dependencies, no network (it swaps
+`repos._buscar` for a fixture), run it with `python3 scripts/test_repos.py`. It pins the filtering,
+the stars/day ranking and the message formatting — including that the numbers in the message come
+from the search response and never from the model. Run it after touching `repos.py`.
+
+**GitHub publishes no trending API — so `repos.py` scrapes `github.com/trending`, deliberately.**
+There is no RSS, no API, no feed: the page is the only source. Do not "fix" this by switching to the
+search API and deriving velocity from `stars / age` — that computes a number GitHub already
+publishes exactly (`1,234 stars today`), and worse. The README's "no HTML scraping" rule is about
+**news sources**, and its stated reason is that outlets *do* publish RSS; it does not generalise to
+sources that have no machine interface at all.
+
+Scraping's cost is fragility, mitigated three ways, all of which must survive any edit here:
+anchor on semantics (`/stargazers` href, `itemprop="programmingLanguage"`, the literal `stars today`)
+and never on CSS classes like `Box-row`; raise loudly when zero repos parse, because trending always
+has rows and a silent empty result would look like a quiet day; and keep the per-period diagnostic
+(`{articulos, sinNombre, sinGanadas, ok}`) so a markup change is diagnosable from the job log alone.
+
+Two traps already paid for in `parsear()`: `<p[^>]*>` also matches `<path>` inside the title's
+`<svg>` (hence `<p\b`), and scraped HTML carries entities that RSS did not — strip tags first, then
+`html.unescape`, never the other way round.
+
 **The daily digest exists twice, on purpose.** `workflows/noticias-ia.json` runs it in local n8n at
 11:00; `.github/workflows/noticias-ia.yml` + `scripts/noticias_ia.py` run the same pipeline on
 GitHub's runners at 09:00 Europe/Madrid. The n8n copy only fires if this machine happens to be awake
@@ -32,8 +61,10 @@ The Actions version, which needs no Docker and no n8n:
 
 ```bash
 pip install -r requirements.txt
-python scripts/noticias_ia.py --dry-run --force              # rank candidates, call nothing
-python scripts/noticias_ia.py --force --ventana ultimas24h   # real send, last 24 h
+python scripts/noticias_ia.py --dry-run --force                 # rank candidates, call nothing
+python scripts/noticias_ia.py --dry-run --force --secciones repos
+python scripts/noticias_ia.py --force --ventana ultimas24h      # real send, last 24 h
+python scripts/test_repos.py                                    # fixture test, no network
 ```
 
 `--force` skips the "is it 09:00 in DIGEST_TZ?" guard; without it the script exits 0 doing nothing.
