@@ -5,10 +5,10 @@ A custom newspaper every morning with news of my preference.
 
 Hay **dos formas de ejecutar el digest diario**, con la misma lógica en las dos:
 
-| | Dónde corre | Cuándo | Depende del portátil |
-|---|---|---|---|
-| **GitHub Actions** | Runners de GitHub | 09:00 hora de Madrid | No |
-| **n8n local** | Docker en tu máquina | 11:00 hora de Madrid | Sí |
+| | Dónde corre | Cuándo | Qué manda | Depende del portátil |
+|---|---|---|---|---|
+| **GitHub Actions** | Runners de GitHub | 09:00 hora de Madrid | Noticias + repos en tendencia | No |
+| **n8n local** | Docker en tu máquina | 11:00 hora de Madrid | Sólo noticias | Sí |
 
 La de GitHub Actions es la que no se salta días: n8n no recupera los triggers de
 schedule que se pierde, así que con el equipo apagado o suspendido a las 11:00 no
@@ -37,7 +37,10 @@ notic-ia/
 ├── .github/workflows/
 │   └── noticias-ia.yml         # el cron de las 9:00 y el job
 ├── scripts/
-│   └── noticias_ia.py          # el pipeline, para correr fuera de n8n
+│   ├── noticias_ia.py          # entrada; sección de noticias + orquestación
+│   ├── repos.py                # sección de repos en tendencia
+│   ├── comun.py                # Telegram, Anthropic y utilidades compartidas
+│   └── test_repos.py           # test con fixture de la sección de repos
 └── workflows/
     ├── hola-mundo.json
     ├── test-telegram.json
@@ -58,22 +61,60 @@ Abrí http://localhost:5678. La primera vez n8n pide crear una cuenta de **owner
 
 # Digest en GitHub Actions
 
-La misma tubería que `noticias-ia.json`, pero en Python y ejecutada por GitHub
-todos los días a las **9:00 hora de Madrid**. No hace falta que haya ningún
-ordenador encendido.
+Ejecutado por GitHub todos los días a las **9:00 hora de Madrid**, sin que haga
+falta ningún ordenador encendido. Manda **dos secciones**, cada una en su propio
+mensaje de Telegram.
+
+## Sección 1: noticias de IA
+
+La misma tubería que `noticias-ia.json`, en Python:
 
 ```
-09:00 Europe/Madrid (GitHub Actions)
-   └─ 9 fuentes RSS (~280 noticias)
-      └─ Filtrar por el día anterior, deduplicar entre medios y rankear → top 40
-         └─ Resumir con Claude (salida JSON validada contra esquema) → top 10
-            └─ Enviar a Telegram (HTML, troceado a 3800 caracteres)
+9 fuentes RSS (~280 noticias)
+   └─ Filtrar por el día anterior, deduplicar entre medios y rankear → top 40
+      └─ Resumir con Claude (salida JSON validada contra esquema) → top 10
+         └─ Enviar a Telegram (HTML, troceado a 3800 caracteres)
 ```
 
 Las fuentes y sus pesos, la normalización de títulos, la fórmula de puntuación,
 el prompt, el esquema de salida y el formato del mensaje son **los mismos** que
 los de los nodos Code del workflow. Son dos implementaciones de lo mismo: si
 tocás una, tocá la otra.
+
+## Sección 2: repos en tendencia
+
+Repositorios de GitHub que están ganando estrellas rápido, con una explicación
+de **para qué sirve** cada herramienta:
+
+```
+API de búsqueda de GitHub (2 consultas)
+   └─ Descartar forks, archivados y repos sin commits recientes
+      └─ Rankear por estrellas/día → top 25
+         └─ Claude elige los 8 más relevantes y explica cada uno
+            └─ Enviar a Telegram
+```
+
+**GitHub no publica una API de "trending".** La página `github.com/trending` es
+HTML, y aquí no se raspa HTML a propósito (mismo motivo por el que las noticias
+salen de RSS). Se usa la API de búsqueda oficial, que sí es estable, con dos
+ventanas complementarias — repos creados en los últimos 30 días con ≥100
+estrellas, y de los últimos 180 días con ≥1000 — y la velocidad se calcula aquí:
+
+```
+estrellas_dia = estrellas / días desde la creación
+```
+
+Es un **promedio desde el día cero**, no las estrellas ganadas esta semana: la
+API no expone el histórico de estrellas. Para repos jóvenes, que son justo los
+que buscamos, el promedio y la velocidad actual se parecen bastante; un repo de
+2015 con 50.000 estrellas queda con un promedio bajo y no aparece.
+
+Los números que ves en el mensaje (estrellas, ritmo, lenguaje) **salen siempre
+de la búsqueda, nunca de la respuesta del modelo** — Claude sólo aporta texto.
+Si devuelve un repo que no estaba entre los candidatos, se descarta con un aviso
+en el log. Así no hay forma de que llegue una cifra inventada.
+
+Esta sección **no tiene equivalente en n8n**: sólo existe en la versión de Actions.
 
 ## Configuración
 
@@ -91,11 +132,12 @@ Telegram**, no en `.env`. Aquí los tres son secretos del repo.
 ## Probarlo sin esperar a mañana
 
 Desde **Actions → Noticias IA diarias → Run workflow**. La ejecución manual se
-salta la comprobación de hora y tiene dos opciones:
+salta la comprobación de hora y tiene tres opciones:
 
 - **ventana**: `ultimas24h` (por defecto en manual) mira las últimas 24 h desde
   este momento — el equivalente de `noticias-ia-now.json`; `ayer` reproduce
-  exactamente lo que haría el cron.
+  exactamente lo que haría el cron. Sólo afecta a las noticias.
+- **secciones**: `noticias,repos` (por defecto), o una sola de las dos.
 - **dry_run**: lista los candidatos y termina, sin gastar API de Anthropic ni
   mandar nada a Telegram. El equivalente barato de *Test Telegram*.
 
@@ -103,12 +145,18 @@ En local, sin Docker ni n8n:
 
 ```bash
 pip install -r requirements.txt
-python scripts/noticias_ia.py --dry-run --force              # sólo ver candidatos
-python scripts/noticias_ia.py --force --ventana ultimas24h   # envío real
+python scripts/noticias_ia.py --dry-run --force                 # ver candidatos de ambas secciones
+python scripts/noticias_ia.py --dry-run --force --secciones repos
+python scripts/noticias_ia.py --force --ventana ultimas24h      # envío real
+python scripts/test_repos.py                                    # test de la sección de repos
 ```
 
 `--force` salta la comprobación de hora; sin él, el script sólo actúa si son las
 9:00 en la zona configurada.
+
+`test_repos.py` no necesita red ni dependencias: sustituye la llamada HTTP por un
+fixture y comprueba el filtrado, el ranking y el formateo del mensaje. Es lo que
+conviene ejecutar tras tocar `repos.py`.
 
 ## Cosas que conviene saber
 
@@ -129,6 +177,15 @@ python scripts/noticias_ia.py --force --ventana ultimas24h   # envío real
 - **Una fuente caída no tumba el digest.** Cada feed se lee por separado y los
   fallos quedan como aviso en el log del job. Sí aborta si *ninguna* fuente
   responde, que es un fallo real y no un día tranquilo.
+
+- **Las dos secciones son independientes.** Si la búsqueda de GitHub falla, las
+  noticias llegan igual, y al revés. El job termina en rojo para que se vea, pero
+  lo que se pudo enviar ya salió. La marca de "ya enviado" se escribe si al menos
+  una sección llegó a Telegram, así que un reintento no duplica la que sí salió.
+
+- **`GITHUB_TOKEN` no hay que configurarlo.** Actions lo inyecta solo; sólo sirve
+  para subir el límite de la API de búsqueda de 10 a 30 peticiones por minuto.
+  El script funciona sin él (usa 2 peticiones por ejecución).
 
 - **El filtrado emite el mismo `diagnostico`** que el nodo Code
   (`{total, sinLink, sinFecha, fueraDeRango, sinHost, ok}`), en el log del job,
