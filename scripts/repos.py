@@ -337,7 +337,14 @@ def sin_repos(fecha_texto: str) -> str:
 # Orquestación de la sección
 # --------------------------------------------------------------------------
 
-def generar(fecha_texto: str, api_key: str, solo_candidatos: bool = False) -> list[str]:
+def generar(
+    fecha_texto: str, api_key: str, solo_candidatos: bool = False
+) -> tuple[list[str], list[dict]]:
+    """Devuelve (bloques de Telegram, candidatos crudos).
+
+    Los candidatos salen también hacia fuera porque la sección de resumen los
+    necesita sin filtrar por el modelo.
+    """
     log("Leyendo github.com/trending...")
     candidatos, diag = obtener_candidatos()
     log(f"Diagnóstico trending: {json.dumps(diag)}")
@@ -357,9 +364,9 @@ def generar(fecha_texto: str, api_key: str, solo_candidatos: bool = False) -> li
         for i, c in enumerate(candidatos[:15], start=1):
             log(f"  [{i}] +{c['ganadas']} ⭐ {c['periodo']:<12} (total {c['estrellas']:>7}) "
                 f"[{c['lenguaje'] or '?'}] {c['nombre']} — {c['descripcion'][:50]}")
-        return []
+        return [], candidatos
 
     log(f"Explicando con {MODELO}...")
     respuesta = llamar_claude(construir_body(candidatos), api_key)
     registrar_uso(respuesta)
-    return formatear_bloques(extraer_datos(respuesta), candidatos, fecha_texto)
+    return formatear_bloques(extraer_datos(respuesta), candidatos, fecha_texto), candidatos

@@ -34,6 +34,7 @@ from datetime import datetime, timedelta, timezone
 import feedparser
 
 import repos
+import resumen
 from comun import (
     AGENTE,
     HORA_DIGEST,
@@ -365,7 +366,12 @@ def sin_noticias(fecha_texto: str) -> list[str]:
 def generar_noticias(
     desde: datetime, hasta: datetime, referencia: datetime,
     fecha_texto: str, api_key: str, solo_candidatos: bool = False,
-) -> list[str]:
+) -> tuple[list[str], list[dict]]:
+    """Devuelve (bloques de Telegram, candidatos crudos).
+
+    Los candidatos salen también hacia fuera porque la sección de resumen los
+    lee SIN filtrar: el top 10 de aquí está rankeado con otro criterio.
+    """
     log("Leyendo fuentes RSS...")
     entradas = leer_feeds(construir_fuentes(referencia))
 
@@ -377,15 +383,15 @@ def generar_noticias(
     if solo_candidatos:
         for i, c in enumerate(candidatos[:15], start=1):
             log(f"  [{i}] ({c['score']}) {c['fuente']} — {c['titulo']}")
-        return []
+        return [], candidatos
 
     if not candidatos:
-        return sin_noticias(fecha_texto)
+        return sin_noticias(fecha_texto), []
 
     log(f"Resumiendo con {MODELO}...")
     respuesta = llamar_claude(construir_body(candidatos, fecha_texto), api_key)
     registrar_uso(respuesta)
-    return formatear_bloques(extraer_datos(respuesta), fecha_texto)
+    return formatear_bloques(extraer_datos(respuesta), fecha_texto), candidatos
 
 
 # --------------------------------------------------------------------------
@@ -411,8 +417,9 @@ def main() -> int:
         help="'ayer' (día natural anterior, el digest de las 9) o 'ultimas24h' (para probar a cualquier hora). Sólo afecta a las noticias.",
     )
     parser.add_argument(
-        "--secciones", default="noticias,repos",
-        help="Qué enviar, separado por comas: noticias, repos. Por defecto ambas.",
+        "--secciones", default="noticias,repos,resumen",
+        help="Qué enviar, separado por comas: noticias, repos, resumen. Por defecto las tres. "
+             "'resumen' se envía siempre el último y necesita al menos una de las otras dos.",
     )
     parser.add_argument(
         "--force", action="store_true",
@@ -429,11 +436,17 @@ def main() -> int:
     )
     args = parser.parse_args()
 
+    VALIDAS = ("noticias", "repos", "resumen")
     secciones = [s.strip() for s in args.secciones.split(",") if s.strip()]
-    desconocidas = [s for s in secciones if s not in ("noticias", "repos")]
+    desconocidas = [s for s in secciones if s not in VALIDAS]
     if desconocidas or not secciones:
-        log(f"ERROR: secciones no válidas: {desconocidas or '(ninguna)'}. Usá 'noticias', 'repos' o ambas.")
+        log(f"ERROR: secciones no válidas: {desconocidas or '(ninguna)'}. Usá: {', '.join(VALIDAS)}.")
         return 1
+    if secciones == ["resumen"]:
+        log("ERROR: 'resumen' filtra el material de las otras secciones; no puede ir solo.")
+        return 1
+    # El resumen lee lo que recogen las otras dos, así que siempre va el último.
+    secciones = [s for s in VALIDAS if s in secciones]
 
     def marcar_enviado() -> None:
         if not args.marca:
@@ -478,15 +491,23 @@ def main() -> int:
     # Cada sección es independiente: que falle la de repos no puede dejarte sin
     # noticias, ni al revés.
     enviadas, fallidas = 0, []
+    material = {"noticias": [], "repos": []}
     for seccion in secciones:
         log(f"--- {seccion} ---")
         try:
             if seccion == "noticias":
-                bloques = generar_noticias(
+                bloques, material["noticias"] = generar_noticias(
                     desde, hasta, referencia, fecha_texto, api_key, args.dry_run
                 )
+            elif seccion == "repos":
+                bloques, material["repos"] = repos.generar(
+                    fecha_texto, api_key, args.dry_run
+                )
             else:
-                bloques = repos.generar(fecha_texto, api_key, args.dry_run)
+                bloques = resumen.generar(
+                    material["noticias"], material["repos"],
+                    fecha_texto, api_key, args.dry_run,
+                )
 
             if args.dry_run or not bloques:
                 continue

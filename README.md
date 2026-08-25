@@ -7,7 +7,7 @@ Hay **dos formas de ejecutar el digest diario**, con la misma lógica en las dos
 
 | | Dónde corre | Cuándo | Qué manda | Depende del portátil |
 |---|---|---|---|---|
-| **GitHub Actions** | Runners de GitHub | 09:00 hora de Madrid | Noticias + repos en tendencia | No |
+| **GitHub Actions** | Runners de GitHub | 09:00 hora de Madrid | Noticias + repos + resumen personal | No |
 | **n8n local** | Docker en tu máquina | 11:00 hora de Madrid | Sólo noticias | Sí |
 
 La de GitHub Actions es la que no se salta días: n8n no recupera los triggers de
@@ -39,8 +39,10 @@ notic-ia/
 ├── scripts/
 │   ├── noticias_ia.py          # entrada; sección de noticias + orquestación
 │   ├── repos.py                # sección de repos en tendencia
+│   ├── resumen.py              # sección final: qué te cambia algo a vos
 │   ├── comun.py                # Telegram, Anthropic y utilidades compartidas
-│   └── test_repos.py           # test con fixture de la sección de repos
+│   ├── test_repos.py           # test con fixture de la sección de repos
+│   └── test_resumen.py         # test de la sección de resumen
 └── workflows/
     ├── hola-mundo.json
     ├── test-telegram.json
@@ -62,8 +64,9 @@ Abrí http://localhost:5678. La primera vez n8n pide crear una cuenta de **owner
 # Digest en GitHub Actions
 
 Ejecutado por GitHub todos los días a las **9:00 hora de Madrid**, sin que haga
-falta ningún ordenador encendido. Manda **dos secciones**, cada una en su propio
-mensaje de Telegram.
+falta ningún ordenador encendido. Manda **tres secciones**, cada una en su propio
+mensaje de Telegram. Las dos primeras cuentan qué pasó; la tercera filtra todo
+eso por lo que de verdad te cambia algo.
 
 ## Sección 1: noticias de IA
 
@@ -127,6 +130,45 @@ candidatos, se descarta con un aviso.
 
 Esta sección **no tiene equivalente en n8n**: sólo existe en la versión de Actions.
 
+## Sección 3: lo que te cambia algo
+
+Las dos secciones anteriores cuentan **qué pasó**. Esta contesta otra pregunta:
+**qué de eso te habilita a hacer algo que ayer no podías, o a hacerlo mucho
+mejor**, como programador, emprendedor y músico.
+
+```
+Los 40 candidatos de noticias (crudos) + los 25 repos
+   └─ Claude filtra con tu perfil, no con "importancia general"
+      └─ 0 a 5 puntos, cada uno con qué cambia y qué podés hacer
+         └─ Enviar a Telegram
+```
+
+Dos decisiones que definen esta sección:
+
+**Lee los candidatos crudos, no lo que ya eligieron las otras secciones.** El
+prompt de noticias rankea la financiación y las adquisiciones como criterio de
+importancia — justo lo que aquí se descarta. Partir de su top 10 heredaría el
+filtro equivocado, y lo que te interesa a vos puede estar en el puesto 30 de los
+40 candidatos.
+
+**Puede devolver cero puntos, y eso es una respuesta correcta.** Un día normal
+no trae nada que cambie cómo trabajás. El prompt dice explícitamente que el
+sesgo correcto es descartar y que no rellene con lo menos malo: un resumen que
+todos los días encuentra cinco cosas importantes deja de distinguir el día que
+sí importa. Cuando no hay nada, el mensaje lo dice y ya está.
+
+Cada punto tiene que superar tres preguntas: ¿hay un hecho concreto y nuevo, o
+es una intención o una cifra de dinero? ¿Podrías actuar sobre esto en la próxima
+semana? ¿Es específico de lo tuyo o es interés general del sector?
+
+### Cambiar el criterio
+
+Todo el "para quién" vive en la constante `PERFIL`, al principio de
+[`scripts/resumen.py`](scripts/resumen.py). Tiene dos listas explícitas —lo que
+interesa y lo que se descarta aunque sea la noticia más grande del día— y es el
+único sitio que hay que tocar para reorientar el filtro. Si algún día te llega
+algo que no querías, lo normal es añadir una línea ahí.
+
 ## Configuración
 
 Tres secretos en **Settings → Secrets and variables → Actions**:
@@ -148,7 +190,9 @@ salta la comprobación de hora y tiene tres opciones:
 - **ventana**: `ultimas24h` (por defecto en manual) mira las últimas 24 h desde
   este momento — el equivalente de `noticias-ia-now.json`; `ayer` reproduce
   exactamente lo que haría el cron. Sólo afecta a las noticias.
-- **secciones**: `noticias,repos` (por defecto), o una sola de las dos.
+- **secciones**: `noticias,repos,resumen` (por defecto), o un subconjunto.
+  `resumen` se envía siempre el último y necesita al menos una de las otras
+  dos, porque filtra el material que ellas recogen.
 - **dry_run**: lista los candidatos y termina, sin gastar API de Anthropic ni
   mandar nada a Telegram. El equivalente barato de *Test Telegram*.
 
@@ -160,6 +204,7 @@ python scripts/noticias_ia.py --dry-run --force                 # ver candidatos
 python scripts/noticias_ia.py --dry-run --force --secciones repos
 python scripts/noticias_ia.py --force --ventana ultimas24h      # envío real
 python scripts/test_repos.py                                    # test de la sección de repos
+python scripts/test_resumen.py                                  # test de la sección de resumen
 ```
 
 `--force` salta la comprobación de hora; sin él, el script sólo actúa si son las
@@ -189,8 +234,8 @@ conviene ejecutar tras tocar `repos.py`.
   fallos quedan como aviso en el log del job. Sí aborta si *ninguna* fuente
   responde, que es un fallo real y no un día tranquilo.
 
-- **Las dos secciones son independientes.** Si la búsqueda de GitHub falla, las
-  noticias llegan igual, y al revés. El job termina en rojo para que se vea, pero
+- **Las secciones son independientes.** Si trending falla, las noticias llegan
+  igual, y al revés; el resumen se hace con el material que haya sobrevivido. El job termina en rojo para que se vea, pero
   lo que se pudo enviar ya salió. La marca de "ya enviado" se escribe si al menos
   una sección llegó a Telegram, así que un reintento no duplica la que sí salió.
 
