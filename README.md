@@ -42,6 +42,7 @@ notic-ia/
 │   ├── resumen.py              # qué de todo eso te cambia algo a vos
 │   ├── laboratorio.py          # cruce con tus propios proyectos
 │   ├── comun.py                # Telegram, Anthropic y utilidades compartidas
+│   ├── test_fuentes.py         # test estructural de la lista de fuentes
 │   ├── test_repos.py           # test con fixture de la sección de repos
 │   ├── test_resumen.py         # test de la sección de resumen
 │   └── test_laboratorio.py     # test de la sección de laboratorio
@@ -80,16 +81,65 @@ que estás construyendo, y sólo aparece cuando encuentra algo.
 La misma tubería que `noticias-ia.json`, en Python:
 
 ```
-9 fuentes RSS (~280 noticias)
-   └─ Filtrar por el día anterior, deduplicar entre medios y rankear → top 40
+36 fuentes RSS (~2900 entradas, ~230 del día)
+   └─ Filtrar por el día anterior, deduplicar entre medios y rankear → top 50
       └─ Resumir con Claude (salida JSON validada contra esquema) → top 10
          └─ Enviar a Telegram (HTML, troceado a 3800 caracteres)
 ```
 
-Las fuentes y sus pesos, la normalización de títulos, la fórmula de puntuación,
-el prompt, el esquema de salida y el formato del mensaje son **los mismos** que
-los de los nodos Code del workflow. Son dos implementaciones de lo mismo: si
-tocás una, tocá la otra.
+### Las fuentes
+
+Todas verificadas: responden y traen entradas. Están en `construir_fuentes()`,
+cada una con su peso.
+
+| Peso | Qué | Cuáles |
+|---|---|---|
+| **5** | Releases de las herramientas que usás | El Atom de `github.com/<repo>/releases.atom`, uno por repo de `HERRAMIENTAS_SEGUIDAS` |
+| **4** | Fuentes primarias | OpenAI, Hugging Face, Google DeepMind, Google Research, Ollama, y Anthropic / Meta AI / Mistral vía Google News |
+| **3** | Prensa de referencia y análisis | TechCrunch, The Verge, Ars Technica, MIT Tech Review, Simon Willison |
+| **2** | Comunidad, divulgación y temáticas | Show HN, Hacker News, Lobsters, r/LocalLLaMA, Wired, VentureBeat, InfoQ, midudev, Dot CSV, Dot CSV Lab, Gentleman Programming, regulación, música y fabricación |
+| **1** | Barrido general | Google News EN y ES |
+
+**Las primarias pesan más que la prensa a propósito**: es el anuncio, no la
+crónica del anuncio. Y como la deduplicación agrupa por título normalizado, el
+anuncio del laboratorio y las cinco crónicas colapsan en una entrada con
+`apariciones: 6`, que puntúa aún más alto. Sumar primarias no sólo añade señal:
+afina el ranking que ya había.
+
+**Anthropic, Meta AI y Mistral no publican RSS.** Comprobado: `/news/rss.xml`,
+`/rss.xml`, `/feed.xml` y `/news/feed` devuelven 404 en anthropic.com. La única
+vía es Google News acotado por dominio, que es de segunda mano y puede llegar
+tarde o incompleta. El peso 4 lo compensa en parte.
+
+**De los divulgadores sólo entra YouTube.** Lo que publican en X o LinkedIn no
+es accesible: X cerró su API gratuita y las instancias de Nitter están caídas
+(`nitter.net` responde 410), y LinkedIn no tiene RSS, redirige a login y sus
+términos prohíben el scraping. Un puente no oficial se rompería en silencio.
+
+**arXiv está deliberadamente fuera.** `cs.AI` devuelve 352 entradas al día y
+`cs.CL` otras 332: ahogarían el corte con papers. Si algún día hace falta
+investigación, es otra sección con su propio corte, no más feeds aquí.
+
+### Cómo se puntúa
+
+`peso × 2 + palabras_clave + apariciones × 2`, penalizando 12 puntos el
+contenido bursátil sindicado. Dos detalles que no son obvios:
+
+- **El peso viaja con la entrada, no se deduce del enlace.** Antes salía del host
+  del enlace, lo que hundía a cualquier fuente servida por un intermediario: una
+  entrada de Anthropic vía Google News aterrizaba en `news.google.com` y cobraba
+  el peso mínimo. Ahora el peso es el máximo entre el que declara el feed y el
+  que tenga el host.
+- **Música y fabricación tienen cupo (suelo y techo).** No llevan las palabras
+  clave con las que se puntúa, así que sin suelo no entrarían nunca y esas
+  fuentes serían decorativas. Con sus propias palabras clave pasaron a competir
+  de más —Adafruit sola se llevaba 5 de los 50 huecos—, de ahí el techo.
+  Música va a propósito por debajo: techo 4 sobre 50, o sea **como mucho el 8%**
+  del digest, y suelo 1 para que pueda casi desaparecer los días flojos. Lo que
+  manda es la tecnología, los inventos y el trabajo de programador.
+
+La sección de noticias del n8n local sigue con sus 9 fuentes originales y su
+lógica; **esta ya no es una traducción de aquella**. Divergen a propósito.
 
 ## Sección 2: repos en tendencia
 
@@ -249,6 +299,7 @@ pip install -r requirements.txt
 python scripts/noticias_ia.py --dry-run --force                 # ver candidatos de ambas secciones
 python scripts/noticias_ia.py --dry-run --force --secciones repos
 python scripts/noticias_ia.py --force --ventana ultimas24h      # envío real
+python scripts/test_fuentes.py                                  # test de la lista de fuentes
 python scripts/test_repos.py                                    # test de la sección de repos
 python scripts/test_resumen.py                                  # test de la sección de resumen
 python scripts/test_laboratorio.py                              # test de la sección de laboratorio
