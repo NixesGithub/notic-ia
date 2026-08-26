@@ -9,8 +9,8 @@ mismas fuentes y pesos, misma deduplicación, misma fórmula de puntuación, mis
 prompt y mismo esquema de salida. Si cambiás una de las dos versiones, cambiá
 la otra.
 
-La sección de repos (scripts/repos.py) sólo existe aquí; no tiene equivalente
-en n8n.
+Las secciones de repos, resumen y laboratorio sólo existen aquí; no tienen
+equivalente en n8n.
 
 Variables de entorno:
   ANTHROPIC_API_KEY    obligatoria salvo en --dry-run
@@ -33,6 +33,7 @@ from datetime import datetime, timedelta, timezone
 
 import feedparser
 
+import laboratorio
 import repos
 import resumen
 from comun import (
@@ -417,9 +418,10 @@ def main() -> int:
         help="'ayer' (día natural anterior, el digest de las 9) o 'ultimas24h' (para probar a cualquier hora). Sólo afecta a las noticias.",
     )
     parser.add_argument(
-        "--secciones", default="noticias,repos,resumen",
-        help="Qué enviar, separado por comas: noticias, repos, resumen. Por defecto las tres. "
-             "'resumen' se envía siempre el último y necesita al menos una de las otras dos.",
+        "--secciones", default="noticias,repos,resumen,laboratorio",
+        help="Qué enviar, separado por comas: noticias, repos, resumen, laboratorio. Por defecto "
+             "las cuatro. 'resumen' y 'laboratorio' filtran el material que recogen las otras "
+             "dos, así que van al final y no pueden ir solas.",
     )
     parser.add_argument(
         "--force", action="store_true",
@@ -436,16 +438,20 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    VALIDAS = ("noticias", "repos", "resumen")
+    VALIDAS = ("noticias", "repos", "resumen", "laboratorio")
+    # Estas dos no recogen material propio: filtran el de las otras.
+    DERIVADAS = ("resumen", "laboratorio")
+
     secciones = [s.strip() for s in args.secciones.split(",") if s.strip()]
     desconocidas = [s for s in secciones if s not in VALIDAS]
     if desconocidas or not secciones:
         log(f"ERROR: secciones no válidas: {desconocidas or '(ninguna)'}. Usá: {', '.join(VALIDAS)}.")
         return 1
-    if secciones == ["resumen"]:
-        log("ERROR: 'resumen' filtra el material de las otras secciones; no puede ir solo.")
+    if all(s in DERIVADAS for s in secciones):
+        log(f"ERROR: {' y '.join(DERIVADAS)} filtran el material de las otras secciones; "
+            "hace falta pedir 'noticias' o 'repos' también.")
         return 1
-    # El resumen lee lo que recogen las otras dos, así que siempre va el último.
+    # Las derivadas leen lo que recogen las otras, así que van siempre al final.
     secciones = [s for s in VALIDAS if s in secciones]
 
     def marcar_enviado() -> None:
@@ -503,8 +509,14 @@ def main() -> int:
                 bloques, material["repos"] = repos.generar(
                     fecha_texto, api_key, args.dry_run
                 )
-            else:
+            elif seccion == "resumen":
                 bloques = resumen.generar(
+                    material["noticias"], material["repos"],
+                    fecha_texto, api_key, args.dry_run,
+                )
+            else:
+                # Puede devolver [] a propósito: sin cruces no se manda nada.
+                bloques = laboratorio.generar(
                     material["noticias"], material["repos"],
                     fecha_texto, api_key, args.dry_run,
                 )

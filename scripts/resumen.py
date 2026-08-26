@@ -21,7 +21,8 @@ from comun import MODELO, escapar, extraer_datos, llamar_claude, log, registrar_
 # "para quién" se filtra.
 PERFIL = "\n".join([
     "Desarrollador de software. También emprendedor (proyectos propios, en solitario o en equipo",
-    "muy pequeño) y músico.",
+    "muy pequeño), músico e inventor: construye sistemas para sí mismo, y le interesa todo lo que",
+    "le permita fabricar algo que antes no podía fabricar.",
     "",
     "LE INTERESA, porque extiende lo que puede hacer:",
     "- Modelos nuevos o versiones nuevas, cuando cambian de verdad lo que se puede pedirles:",
@@ -38,12 +39,25 @@ PERFIL = "\n".join([
     "- Cambios que afectan a lo que un desarrollador o un proyecto pequeño puede lanzar:",
     "  licencias, condiciones de uso, precios que abren o cierran puertas, cambios legales con",
     "  efecto práctico e inmediato sobre qué se puede publicar.",
+    "- Agentes que operan solos: sistemas que navegan, usan el ordenador, ejecutan tareas largas",
+    "  sin supervisión. Es una capacidad nueva, no una noticia de producto: cuenta aunque no",
+    "  pueda usarlo hoy mismo, porque cambia lo que es construible.",
+    "- Herramientas de fabricación y prototipado en general, no sólo software: impresión 3D,",
+    "  electrónica accesible, CAD asistido, simulación, hardware barato. Le sirve todo lo que",
+    "  baje la barrera de construir una cosa que antes requería un taller o un equipo.",
+    "- Disputas legales o regulatorias que afecten DIRECTAMENTE a los laboratorios cuyas",
+    "  herramientas usa (OpenAI, Anthropic, Google, Meta...) cuando puedan cambiar el acceso,",
+    "  los precios, las condiciones de uso o la disponibilidad de sus modelos. Esta es una",
+    "  EXCEPCIÓN deliberada a la regla de abajo sobre política de empresas: no le interesa el",
+    "  conflicto en sí, le interesa si mañana puede seguir usando la herramienta igual.",
     "",
     "NO LE INTERESA, y hay que descartarlo aunque sea la noticia más grande del día:",
     "- Rondas de financiación, valoraciones, inversores, salidas a bolsa, resultados trimestrales.",
     "- Fusiones y adquisiciones, salvo que el titular diga explícitamente que un producto que él",
     "  usaría se cierra, se abre o cambia de condiciones.",
     "- Fichajes, ceses y movimientos de ejecutivos; política interna de las empresas.",
+    "  (Ojo: esto NO cubre las disputas legales o regulatorias de arriba, que sí le interesan",
+    "  cuando pueden cambiar el acceso a una herramienta que usa.)",
     "- Acciones, bolsa, predicciones de mercado, 'deberías comprar X'.",
     "- Opinión y futurología sin hecho nuevo: 'la IA cambiará el trabajo', 'los agentes son el futuro'.",
     "- Estudios sobre el impacto social o laboral de la IA, salvo que cambien algo que él haga.",
@@ -52,10 +66,47 @@ PERFIL = "\n".join([
     "- Anuncios de conferencias, ponentes, premios y eventos.",
 ])
 
+# Casos de calibración: noticias que el dueño de este digest señaló como
+# claramente relevantes, y el patrón que las hace relevantes. Están escritas como
+# PATRONES ilustrados con sus ejemplos, no como nombres sueltos, para que el
+# criterio transfiera a cosas que todavía no existen.
+#
+# Si algún día llega algo que no querías, o se pierde algo que sí, el arreglo es
+# añadir una línea aquí o en PERFIL. No hay entrenamiento detrás: esto es el
+# prompt, y es lo único que decide.
+EJEMPLOS = "\n".join([
+    "CASOS QUE SÍ ERAN RELEVANTES (calibrá el listón con estos):",
+    "",
+    "- La aparición de agentes que operan solos en internet: sistemas que navegan, usan el",
+    "  ordenador y encadenan tareas largas sin que nadie los supervise. Relevante porque es una",
+    "  capacidad nueva que cambia qué cosas son construibles, no porque sea un producto vistoso.",
+    "- Cada versión nueva de los modelos grandes (OpenAI, Anthropic, Google...) cuando trae un",
+    "  cambio real de capacidad, contexto, precio o velocidad. Una versión que sólo es 'mejor en",
+    "  benchmarks' sin consecuencia práctica NO cuenta.",
+    "- La salida de herramientas que cambian cómo se programa: un agente de código que corre en la",
+    "  terminal, un editor con el modelo integrado, un protocolo para conectar modelos a",
+    "  herramientas. Relevante porque se instala hoy y cambia el trabajo diario de mañana.",
+    "- Disputas legales o regulatorias que afectan a un laboratorio cuya herramienta usa —por",
+    "  ejemplo un gobierno enfrentado a Anthropic o a OpenAI— cuando puedan cambiar el acceso,",
+    "  el precio o las condiciones de uso. El conflicto no importa; importa si mañana la",
+    "  herramienta sigue estando y en qué términos.",
+    "- Cualquier herramienta, de software o de fabricación, que le permita construir algo que",
+    "  antes necesitaba un taller, un equipo o un presupuesto que no tiene.",
+    "",
+    "CASOS QUE NO ERAN RELEVANTES, por más grandes que fueran:",
+    "",
+    "- 'La empresa X cerró una ronda de N millones' / 'ahora vale N mil millones'. Es la noticia",
+    "  más repetida del sector y no cambia absolutamente nada de lo que él puede hacer.",
+    "- Cambios de ejecutivos, reorganizaciones, peleas societarias sin efecto sobre el producto.",
+    "- 'La IA transformará el empleo': ensayo sin hecho nuevo ni herramienta que tocar.",
+])
+
 SYSTEM = "\n".join([
     "Filtras el ruido de un briefing diario de IA para UNA persona concreta. Este es su perfil:",
     "",
     PERFIL,
+    "",
+    EJEMPLOS,
     "",
     "Recibes dos listas: titulares de noticias del día y repositorios de GitHub en tendencia.",
     "",
@@ -87,7 +138,9 @@ SYSTEM = "\n".join([
     '- "que_podes_hacer": 1 o 2 frases con la acción concreta que puede tomar. Un comando, una',
     "  prueba, un cambio en su flujo de trabajo, algo que instalar. Si no se te ocurre ninguna",
     "  acción concreta, entonces el punto no pasaba el listón: quítalo.",
-    '- "faceta": exactamente una de "programador", "emprendedor", "músico".',
+    '- "faceta": exactamente una de "programador", "emprendedor", "músico", "inventor".',
+    '  Usá "inventor" cuando lo que cambia es la capacidad de FABRICAR algo nuevo, sea software',
+    "  o no, más que la de programar mejor.",
     '- "url" y "fuente": cópialos EXACTAMENTE del candidato. No inventes URLs.',
     "- Ordena de más a menos impacto para él.",
     '- "veredicto": una frase honesta sobre el día. Si no hay nada, dilo claramente',
@@ -105,7 +158,8 @@ ESQUEMA = {
                     "titulo": {"type": "string"},
                     "que_cambia": {"type": "string"},
                     "que_podes_hacer": {"type": "string"},
-                    "faceta": {"type": "string", "enum": ["programador", "emprendedor", "músico"]},
+                    "faceta": {"type": "string",
+                               "enum": ["programador", "emprendedor", "músico", "inventor"]},
                     "fuente": {"type": "string"},
                     "url": {"type": "string"},
                 },
@@ -119,7 +173,7 @@ ESQUEMA = {
     "additionalProperties": False,
 }
 
-ICONOS = {"programador": "💻", "emprendedor": "🚀", "músico": "🎸"}
+ICONOS = {"programador": "💻", "emprendedor": "🚀", "músico": "🎸", "inventor": "🔧"}
 
 
 def construir_body(noticias: list[dict], repos_: list[dict], fecha_texto: str) -> dict:
