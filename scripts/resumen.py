@@ -15,7 +15,7 @@ perfil puede estar en el puesto 30 de los candidatos.
 
 from __future__ import annotations
 
-from comun import MODELO, escapar, extraer_datos, llamar_claude, log, registrar_uso
+from comun import escapar, log, modelo_de, preguntar
 
 # Editá esto y cambia todo el criterio del resumen. Es el único sitio donde vive
 # "para quién" se filtra.
@@ -176,7 +176,7 @@ ESQUEMA = {
 ICONOS = {"programador": "💻", "emprendedor": "🚀", "músico": "🎸", "inventor": "🔧"}
 
 
-def construir_body(noticias: list[dict], repos_: list[dict], fecha_texto: str) -> dict:
+def construir_peticion(noticias: list[dict], repos_: list[dict], fecha_texto: str) -> dict:
     partes = []
 
     if noticias:
@@ -201,13 +201,9 @@ def construir_body(noticias: list[dict], repos_: list[dict], fecha_texto: str) -
         ))
 
     return {
-        "model": MODELO,
-        "max_tokens": 16000,
         "system": SYSTEM,
-        "messages": [
-            {"role": "user", "content": f"Material del {fecha_texto}:\n\n" + "\n\n".join(partes)}
-        ],
-        "output_config": {"format": {"type": "json_schema", "schema": ESQUEMA}},
+        "usuario": f"Material del {fecha_texto}:\n\n" + "\n\n".join(partes),
+        "esquema": ESQUEMA,
     }
 
 
@@ -248,9 +244,7 @@ def generar(
         log("  (en --dry-run no se llama al modelo; el filtrado lo hace él)")
         return []
 
-    log(f"Filtrando con {MODELO}...")
-    respuesta = llamar_claude(construir_body(noticias, repos_, fecha_texto), api_key)
-    registrar_uso(respuesta)
-    datos = extraer_datos(respuesta)
+    log(f"Filtrando con {modelo_de('resumen')}...")
+    datos = preguntar("resumen", **construir_peticion(noticias, repos_, fecha_texto), clave=api_key)
     log(f"Puntos que pasan el listón: {len(datos.get('puntos') or [])}")
     return formatear_bloques(datos, fecha_texto)

@@ -85,12 +85,12 @@ def main() -> int:
             laboratorio.DIRECTORIO = original
 
     print("\nEl inventario entra en el prompt:")
-    body = laboratorio.construir_body(PROYECTOS, NOTICIAS, REPOS)
-    contenido = body["messages"][0]["content"]
+    peticion = laboratorio.construir_peticion(PROYECTOS, NOTICIAS, REPOS)
+    contenido = peticion["usuario"]
     comprobar("INVENTARIO:" in contenido, "va el inventario")
     comprobar("Raspo HTML frágil." in contenido, "con los bloqueos, que son lo que se cruza")
     comprobar("[N1]" in contenido and "[R1]" in contenido, "van las noticias y los repos")
-    comprobar("EL SESGO CORRECTO ES NO ENCONTRAR NADA" in body["system"],
+    comprobar("EL SESGO CORRECTO ES NO ENCONTRAR NADA" in peticion["system"],
               "el prompt dice explícitamente que lo normal es no encontrar nada")
 
     print("\nSin material:")

@@ -25,7 +25,7 @@ import re
 import urllib.error
 import urllib.request
 
-from comun import MODELO, escapar, extraer_datos, limpiar_html, llamar_claude, log, registrar_uso
+from comun import escapar, limpiar_html, log, modelo_de, preguntar
 
 URL_TRENDING = "https://github.com/trending"
 
@@ -257,7 +257,7 @@ ESQUEMA = {
 }
 
 
-def construir_body(candidatos: list[dict]) -> dict:
+def construir_peticion(candidatos: list[dict]) -> dict:
     listado = "\n\n".join(
         "\n".join(filter(None, [
             f"[{i + 1}] {c['nombre']}",
@@ -269,13 +269,9 @@ def construir_body(candidatos: list[dict]) -> dict:
     )
 
     return {
-        "model": MODELO,
-        "max_tokens": 16000,
         "system": SYSTEM,
-        "messages": [
-            {"role": "user", "content": f"Repositorios en tendencia:\n\n{listado}"}
-        ],
-        "output_config": {"format": {"type": "json_schema", "schema": ESQUEMA}},
+        "usuario": f"Repositorios en tendencia:\n\n{listado}",
+        "esquema": ESQUEMA,
     }
 
 
@@ -366,7 +362,6 @@ def generar(
                 f"[{c['lenguaje'] or '?'}] {c['nombre']} — {c['descripcion'][:50]}")
         return [], candidatos
 
-    log(f"Explicando con {MODELO}...")
-    respuesta = llamar_claude(construir_body(candidatos), api_key)
-    registrar_uso(respuesta)
-    return formatear_bloques(extraer_datos(respuesta), candidatos, fecha_texto), candidatos
+    log(f"Explicando con {modelo_de('repos')}...")
+    datos = preguntar("repos", **construir_peticion(candidatos), clave=api_key)
+    return formatear_bloques(datos, candidatos, fecha_texto), candidatos

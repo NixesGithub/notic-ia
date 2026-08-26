@@ -42,6 +42,7 @@ notic-ia/
 │   ├── resumen.py              # qué de todo eso te cambia algo a vos
 │   ├── laboratorio.py          # cruce con tus propios proyectos
 │   ├── comun.py                # Telegram, Anthropic y utilidades compartidas
+│   ├── test_proveedor.py       # test del cambio de proveedor
 │   ├── test_fuentes.py         # test estructural de la lista de fuentes
 │   ├── test_repos.py           # test con fixture de la sección de repos
 │   ├── test_resumen.py         # test de la sección de resumen
@@ -265,13 +266,85 @@ que registrarlo en ningún sitio. El contenido va al modelo **tal cual, sin
 parsear**, así que el formato es libre: la plantilla es una sugerencia, no un
 esquema.
 
+## Cambiar de modelo o de proveedor
+
+El proveedor se elige con **`LLM_BASE_URL`**. Por defecto es Anthropic;
+cualquier otra URL se trata como API **compatible con OpenAI**, que es lo que
+hablan OpenRouter, Groq, Cerebras y Moonshot (Kimi). Son dos formatos de
+petición y dos de respuesta, y nada más: el resto del código pide "esto es el
+system, esto el mensaje, esto el esquema" y no sabe quién contesta.
+
+| Variable | Dónde | Para qué |
+|---|---|---|
+| `LLM_API_KEY` | **Secrets** | La credencial. `ANTHROPIC_API_KEY` se sigue aceptando |
+| `LLM_BASE_URL` | **Variables** | El proveedor. Vacío = Anthropic |
+| `DIGEST_MODEL` | **Variables** | El modelo para todas las secciones |
+| `DIGEST_MODEL_NOTICIAS` / `_REPOS` / `_RESUMEN` / `_LABORATORIO` | **Variables** | El modelo de una sección concreta |
+
+Las URLs y los nombres de modelo **no son credenciales**: van en la pestaña
+Variables, no en Secrets.
+
+### Por qué hay un modelo por sección
+
+Porque las secciones no piden lo mismo. Resumir titulares y explicar repos es
+mecánico: lo hace cualquier modelo decente. Decidir **qué te cambia algo** —y
+sobre todo atreverse a devolver cero puntos cuando no hay nada— es justo donde
+se nota la diferencia entre modelos, y es la instrucción que los más flojos
+ignoran: rellenan.
+
+Así que la configuración que tiene sentido si querés bajar el coste es poner un
+modelo gratis en lo mecánico y reservar el bueno para el juicio:
+
+```
+DIGEST_MODEL            = <un modelo gratis>
+DIGEST_MODEL_RESUMEN    = claude-sonnet-5
+DIGEST_MODEL_LABORATORIO = claude-sonnet-5
+```
+
+### Modelos gratis
+
+OpenRouter (`LLM_BASE_URL = https://openrouter.ai/api`) expone modelos con
+precio 0 de entrada **y** de salida. La lista cambia, así que conviene mirarla
+antes de elegir; sólo sirven los que soportan `structured_outputs`, porque el
+esquema JSON estricto es la pieza de la que depende todo el pipeline:
+
+```bash
+curl -s https://openrouter.ai/api/v1/models | python3 -c "
+import json,sys
+for m in json.load(sys.stdin)['data']:
+    p = m.get('pricing', {})
+    if float(p.get('prompt') or 0) == 0 and float(p.get('completion') or 0) == 0 \
+       and 'structured_outputs' in (m.get('supported_parameters') or []):
+        print(f\"{m['id']:55} ctx={m.get('context_length'):>9,}\")"
+```
+
+Dos cosas que conviene saber antes de mover el resumen o el laboratorio a un
+modelo gratis:
+
+- **Los modelos gratis suelen exigir que se registren tus prompts.** Para las
+  noticias da igual: son titulares públicos. Para el **laboratorio** no: esa
+  sección manda tu inventario de proyectos, con lo que estás construyendo y lo
+  que todavía no podés hacer.
+- **Un modelo gratis puede desaparecer sin aviso.** La sección fallaría sola,
+  sin arrastrar a las demás, y el error saldría en el log del job.
+
+### Coste
+
+Con `claude-sonnet-5` en todo, medido sobre los prompts reales: unos 25.000
+tokens de entrada y 4.700 de salida al día, es decir **~0,10 $/día ≈ 2,70 €/mes**.
+El scraping, los feeds, el ranking y la deduplicación no cuestan nada: son
+Python. Los minutos de Actions son gratis en repos públicos.
+
+El log del job imprime los tokens reales de cada sección, así que el número
+exacto está siempre ahí.
+
 ## Configuración
 
 Tres secretos en **Settings → Secrets and variables → Actions**:
 
 | Secreto | De dónde sale |
 |---|---|
-| `ANTHROPIC_API_KEY` | https://console.anthropic.com → *API Keys* |
+| `LLM_API_KEY` | https://console.anthropic.com → *API Keys* (o la del proveedor que uses, ver arriba) |
 | `TELEGRAM_BOT_TOKEN` | El token que da **@BotFather** con `/newbot` — el mismo de la credencial de n8n |
 | `TELEGRAM_CHAT_ID` | El mismo número que hay en `.env` |
 
@@ -299,6 +372,7 @@ pip install -r requirements.txt
 python scripts/noticias_ia.py --dry-run --force                 # ver candidatos de ambas secciones
 python scripts/noticias_ia.py --dry-run --force --secciones repos
 python scripts/noticias_ia.py --force --ventana ultimas24h      # envío real
+python scripts/test_proveedor.py                                # test del cambio de proveedor
 python scripts/test_fuentes.py                                  # test de la lista de fuentes
 python scripts/test_repos.py                                    # test de la sección de repos
 python scripts/test_resumen.py                                  # test de la sección de resumen
