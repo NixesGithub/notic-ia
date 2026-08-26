@@ -13,12 +13,18 @@ Las secciones de repos, resumen y laboratorio sólo existen aquí; no tienen
 equivalente en n8n.
 
 Variables de entorno:
-  ANTHROPIC_API_KEY    obligatoria salvo en --dry-run
+  LLM_API_KEY          obligatoria salvo en --dry-run (ANTHROPIC_API_KEY vale igual)
+  LLM_BASE_URL         proveedor; por defecto https://api.anthropic.com. Cualquier
+                       otra URL se trata como API compatible con OpenAI, que es lo
+                       que hablan OpenRouter, Groq, Cerebras o Moonshot (Kimi)
   TELEGRAM_BOT_TOKEN   obligatoria salvo en --dry-run
   TELEGRAM_CHAT_ID     obligatoria salvo en --dry-run
   DIGEST_TZ            zona horaria del digest (por defecto Europe/Madrid)
   DIGEST_HOUR          hora local a la que debe salir (por defecto 9)
-  DIGEST_MODEL         modelo de Anthropic (por defecto claude-sonnet-5)
+  DIGEST_MODEL         modelo (por defecto claude-sonnet-5 si el proveedor es Anthropic)
+  DIGEST_MODEL_<SECCION>  modelo sólo para esa sección: NOTICIAS, REPOS, RESUMEN,
+                       LABORATORIO. Permite lo mecánico en un modelo gratis y
+                       reservar el bueno para el juicio
 """
 
 from __future__ import annotations
@@ -39,17 +45,16 @@ import resumen
 from comun import (
     AGENTE,
     HORA_DIGEST,
-    MODELO,
     ZONA,
+    clave_api,
     escapar,
     enviar_telegram,
-    extraer_datos,
     fecha_en_espanol,
     limpiar_html,
-    llamar_claude,
     log,
+    modelo_de,
     normalizar,
-    registrar_uso,
+    preguntar,
     trocear,
 )
 
@@ -502,7 +507,8 @@ ESQUEMA = {
 }
 
 
-def construir_body(candidatos: list[dict], fecha_texto: str) -> dict:
+def construir_peticion(candidatos: list[dict], fecha_texto: str) -> dict:
+    """Devuelve el system, el mensaje y el esquema. Neutro: no sabe qué proveedor lo atenderá."""
     listado = "\n\n".join(
         "\n".join(filter(None, [
             f"[{i + 1}] {c['titulo']}",
@@ -514,14 +520,9 @@ def construir_body(candidatos: list[dict], fecha_texto: str) -> dict:
     )
 
     return {
-        # Sonnet 5 en vez de Opus: resumir titulares no necesita el modelo más caro.
-        "model": MODELO,
-        "max_tokens": 16000,
         "system": SYSTEM,
-        "messages": [
-            {"role": "user", "content": f"Titulares candidatos del {fecha_texto}:\n\n{listado}"}
-        ],
-        "output_config": {"format": {"type": "json_schema", "schema": ESQUEMA}},
+        "usuario": f"Titulares candidatos del {fecha_texto}:\n\n{listado}",
+        "esquema": ESQUEMA,
     }
 
 
@@ -578,10 +579,9 @@ def generar_noticias(
     if not candidatos:
         return sin_noticias(fecha_texto), []
 
-    log(f"Resumiendo con {MODELO}...")
-    respuesta = llamar_claude(construir_body(candidatos, fecha_texto), api_key)
-    registrar_uso(respuesta)
-    return formatear_bloques(extraer_datos(respuesta), fecha_texto), candidatos
+    log(f"Resumiendo con {modelo_de('noticias')}...")
+    datos = preguntar("noticias", **construir_peticion(candidatos, fecha_texto), clave=api_key)
+    return formatear_bloques(datos, fecha_texto), candidatos
 
 
 # --------------------------------------------------------------------------
@@ -669,10 +669,10 @@ def main() -> int:
     if not args.dry_run:
         token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
         chat_id = os.environ.get("TELEGRAM_CHAT_ID", "")
-        api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+        api_key = clave_api()
         faltan = [
             nombre for nombre, valor in [
-                ("ANTHROPIC_API_KEY", api_key),
+                ("LLM_API_KEY (o ANTHROPIC_API_KEY)", api_key),
                 ("TELEGRAM_BOT_TOKEN", token),
                 ("TELEGRAM_CHAT_ID", chat_id),
             ] if not valor

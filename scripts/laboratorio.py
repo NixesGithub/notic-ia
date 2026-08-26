@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import pathlib
 
-from comun import MODELO, escapar, extraer_datos, llamar_claude, log, registrar_uso
+from comun import escapar, log, modelo_de, preguntar
 
 DIRECTORIO = pathlib.Path(__file__).resolve().parent.parent / "laboratorio"
 
@@ -123,7 +123,7 @@ ESQUEMA = {
 }
 
 
-def construir_body(proyectos: list[dict], noticias: list[dict], repos_: list[dict]) -> dict:
+def construir_peticion(proyectos: list[dict], noticias: list[dict], repos_: list[dict]) -> dict:
     partes = ["INVENTARIO:\n\n" + "\n\n---\n\n".join(p["texto"] for p in proyectos)]
 
     if noticias:
@@ -146,13 +146,7 @@ def construir_body(proyectos: list[dict], noticias: list[dict], repos_: list[dic
             for i, c in enumerate(repos_)
         ))
 
-    return {
-        "model": MODELO,
-        "max_tokens": 16000,
-        "system": SYSTEM,
-        "messages": [{"role": "user", "content": "\n\n".join(partes)}],
-        "output_config": {"format": {"type": "json_schema", "schema": ESQUEMA}},
-    }
+    return {"system": SYSTEM, "usuario": "\n\n".join(partes), "esquema": ESQUEMA}
 
 
 ICONOS = {"alta": "🎯", "media": "🤔"}
@@ -214,10 +208,9 @@ def generar(
         log("  (en --dry-run no se llama al modelo; el cruce lo hace él)")
         return []
 
-    log(f"Buscando cruces con {MODELO}...")
-    respuesta = llamar_claude(construir_body(proyectos, noticias, repos_), api_key)
-    registrar_uso(respuesta)
-    bloques = formatear_bloques(extraer_datos(respuesta), proyectos, fecha_texto)
+    log(f"Buscando cruces con {modelo_de('laboratorio')}...")
+    datos = preguntar("laboratorio", **construir_peticion(proyectos, noticias, repos_), clave=api_key)
+    bloques = formatear_bloques(datos, proyectos, fecha_texto)
     log(f"Cruces encontrados: {max(len(bloques) - 1, 0)}"
         + ("" if bloques else " (no se manda mensaje)"))
     return bloques

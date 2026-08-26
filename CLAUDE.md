@@ -8,6 +8,29 @@ A local [n8n](https://n8n.io) instance run with Docker Compose, where **workflow
 as JSON** under `workflows/` and are imported into n8n on every startup. There is no `package.json`,
 no build, and no test suite — the deliverable is the compose file plus the workflow JSONs.
 
+**The provider is swappable and the code must stay neutral about it.** `LLM_BASE_URL` picks it:
+Anthropic by default, anything else treated as OpenAI-compatible (OpenRouter, Groq, Cerebras,
+Moonshot/Kimi all speak it). Only `comun.py` knows the difference — `_peticion` builds the request
+and `_leer` reads the response, one branch each. Every section returns a **neutral spec**
+(`{system, usuario, esquema}`) from its `construir_peticion` and calls `preguntar(seccion, ...)`;
+none of them names a provider, a header or a response shape. Keep it that way: a provider detail
+leaking into a section is how this stops being swappable.
+
+**The strict JSON schema is load-bearing, in both shapes.** Anthropic gets `output_config.format`,
+OpenAI-compatible gets `response_format.json_schema` with `strict: true`. Drop `strict` and the JSON
+arrives approximate, `preguntar` throws on parse, and every section dies in turn. `test_proveedor.py`
+pins both shapes.
+
+**Per-section models exist for a reason** (`DIGEST_MODEL_<SECCION>` over `DIGEST_MODEL`): summarising
+headlines is mechanical, but `resumen` and `laboratorio` have to *judge* — and to return nothing when
+nothing qualifies, which is precisely the instruction weaker models ignore. Cheap model on the
+mechanical sections, good model on the judgement ones. Also note `laboratorio` is the only section
+that sends **private** data (the owner's project inventory), which matters when picking a free model
+whose terms may log prompts.
+
+**Read env vars with `or`, never `get(k, default)`.** GitHub Actions injects an *empty* value for an
+undefined `vars.X`, so the `get` default never fires and you silently get `""`.
+
 **Sources declare their own weight, and that weight travels with each entry.** It used to be derived
 from the *link's* host, which sank any source served through an intermediary — an Anthropic item
 arriving via Google News landed on `news.google.com` and scored the minimum, however primary the
@@ -138,6 +161,7 @@ pip install -r requirements.txt
 python scripts/noticias_ia.py --dry-run --force                 # rank candidates, call nothing
 python scripts/noticias_ia.py --dry-run --force --secciones repos
 python scripts/noticias_ia.py --force --ventana ultimas24h      # real send, last 24 h
+python scripts/test_proveedor.py                                # provider swap, both shapes
 python scripts/test_fuentes.py                                  # source-list structure
 python scripts/test_repos.py                                    # fixture test, no network
 python scripts/test_resumen.py                                  # summary test, no network

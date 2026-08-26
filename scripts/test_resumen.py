@@ -65,20 +65,20 @@ def main() -> int:
     comprobar("Probá pasarle el repo &lt;entero&gt;." in texto, "se escapa también en la acción")
 
     print("\nMaterial de entrada:")
-    body = resumen.construir_body(NOTICIAS, REPOS, "24 de agosto de 2026")
-    contenido = body["messages"][0]["content"]
+    peticion = resumen.construir_peticion(NOTICIAS, REPOS, "24 de agosto de 2026")
+    contenido = peticion["usuario"]
     comprobar("[N1]" in contenido and "[N2]" in contenido, "entran TODAS las noticias candidatas")
     comprobar("Startup de IA levanta 200 millones" in contenido,
               "hasta las que se descartarán: filtra el modelo, no el código")
     comprobar("[R1]" in contenido, "entran los repos")
     comprobar("acme/cohete" in contenido, "con su nombre")
-    comprobar("Rondas de financiación" in body["system"],
+    comprobar("Rondas de financiación" in peticion["system"],
               "el perfil con las exclusiones va en el system prompt")
 
     print("\nSólo con una de las dos fuentes:")
-    solo_noticias = resumen.construir_body(NOTICIAS, [], "hoy")["messages"][0]["content"]
+    solo_noticias = resumen.construir_peticion(NOTICIAS, [], "hoy")["usuario"]
     comprobar("REPOS EN TENDENCIA" not in solo_noticias, "sin repos no se manda esa cabecera vacía")
-    solo_repos = resumen.construir_body([], REPOS, "hoy")["messages"][0]["content"]
+    solo_repos = resumen.construir_peticion([], REPOS, "hoy")["usuario"]
     comprobar("NOTICIAS" not in solo_repos, "sin noticias tampoco")
 
     print("\nSin material:")

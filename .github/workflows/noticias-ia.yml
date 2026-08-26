@@ -84,9 +84,20 @@ jobs:
       - name: Generar y enviar el digest
         if: steps.marca.outputs.cache-hit != 'true'
         env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          # La key va en Secrets. ANTHROPIC_API_KEY se sigue aceptando para no
+          # romper nada si ya estaba puesta.
+          LLM_API_KEY: ${{ secrets.LLM_API_KEY || secrets.ANTHROPIC_API_KEY }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          # Esto NO son credenciales: son configuración, así que van en la
+          # pestaña Variables, no en Secrets. Si están vacías se usa Anthropic
+          # con claude-sonnet-5, que es el comportamiento de siempre.
+          LLM_BASE_URL: ${{ vars.LLM_BASE_URL }}
+          DIGEST_MODEL: ${{ vars.DIGEST_MODEL }}
+          DIGEST_MODEL_NOTICIAS: ${{ vars.DIGEST_MODEL_NOTICIAS }}
+          DIGEST_MODEL_REPOS: ${{ vars.DIGEST_MODEL_REPOS }}
+          DIGEST_MODEL_RESUMEN: ${{ vars.DIGEST_MODEL_RESUMEN }}
+          DIGEST_MODEL_LABORATORIO: ${{ vars.DIGEST_MODEL_LABORATORIO }}
         run: |
           python scripts/noticias_ia.py \
             --ventana "${{ inputs.ventana || 'ayer' }}" \
