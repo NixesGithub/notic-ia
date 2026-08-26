@@ -8,9 +8,27 @@ A local [n8n](https://n8n.io) instance run with Docker Compose, where **workflow
 as JSON** under `workflows/` and are imported into n8n on every startup. There is no `package.json`,
 no build, and no test suite — the deliverable is the compose file plus the workflow JSONs.
 
-**The Actions digest has three sections.** `scripts/noticias_ia.py` is the entry point and holds the
+**`laboratorio` crosses the day against the owner's own backlog, and stays silent by default.**
+`laboratorio/*.md` is a hand-written inventory, one file per project; its contents go to the model
+verbatim — deliberately unparsed, so any format a human writes works and no parser can fail silently.
+Three invariants:
+
+- **The match is against declared BLOCKERS, not project descriptions.** A tool fits a problem, not a
+  project. An inventory that only says what each thing does gives the model nowhere to land a match,
+  and the section goes permanently quiet for the wrong reason. `laboratorio/README.md` explains this
+  to whoever writes the entries; keep that explanation intact.
+- **No match means no message at all** — not a message saying there was nothing. An alert that
+  arrives daily stops being an alert. `formatear_bloques` returns `[]`, and `test_laboratorio.py`
+  pins that case first.
+- **Project names are validated against the inventory**, same as repo names in `repos.py`: anything
+  the model invents is dropped with a log warning.
+
+An empty or missing `laboratorio/` is not an error — it logs and returns `[]`.
+
+**The Actions digest has four sections.** `scripts/noticias_ia.py` is the entry point and holds the
 AI-news section plus the orchestration (hour guard, section loop, Telegram send); `scripts/repos.py`
-holds the GitHub-trending section; `scripts/resumen.py` holds the personal filter that runs last;
+holds the GitHub-trending section; `scripts/resumen.py` holds the personal filter; `scripts/laboratorio.py` crosses the day against
+`laboratorio/*.md` and runs last;
 `scripts/comun.py` holds what they all need (Anthropic call, Telegram send, chunking, escaping,
 timezone). Sections are isolated — one raising does not stop the others, and the job exits non-zero
 if any failed *after* sending what worked. Only the news section has an n8n equivalent; that drift is
@@ -28,10 +46,16 @@ section 3 reports what changes what the reader can *do*. Two invariants:
   that padding with the least-bad item is a failure. A summary that finds five important things every
   day cannot mark the day that matters. `test_resumen.py` pins the empty case first for this reason.
 
-The whole "for whom" lives in the `PERFIL` constant at the top of `resumen.py` — two explicit lists,
-interests and hard exclusions. Retargeting the filter means editing that constant and nothing else.
+The whole "for whom" lives at the top of `resumen.py`: `PERFIL` (interests and hard exclusions) and
+`EJEMPLOS` (calibration cases the owner supplied — news that did matter, and the big-looking news
+that did not). **There is no training loop anywhere in this repo**: these prompts are the entire
+criterion. When the owner says "learn that X matters", the change is a line in one of those two
+constants. Note the deliberate tension already encoded there: `PERFIL` excludes company politics
+but carves out legal and regulatory disputes involving labs whose tools he depends on, because
+those can change his access. Do not "clean up" that contradiction — it is the point.
 
-`scripts/test_repos.py` and `scripts/test_resumen.py` are the repo's tests: no dependencies, no network (it swaps
+`scripts/test_repos.py`, `scripts/test_resumen.py` and `scripts/test_laboratorio.py` are the
+repo's tests: no dependencies, no network (it swaps
 `repos._buscar` for a fixture), run it with `python3 scripts/test_repos.py`. It pins the filtering,
 the stars/day ranking and the message formatting — including that the numbers in the message come
 from the search response and never from the model. Run it after touching `repos.py`.
@@ -92,6 +116,7 @@ python scripts/noticias_ia.py --dry-run --force --secciones repos
 python scripts/noticias_ia.py --force --ventana ultimas24h      # real send, last 24 h
 python scripts/test_repos.py                                    # fixture test, no network
 python scripts/test_resumen.py                                  # summary test, no network
+python scripts/test_laboratorio.py                              # lab cross-reference test
 ```
 
 `--force` skips the "is it 09:00 in DIGEST_TZ?" guard; without it the script exits 0 doing nothing.

@@ -7,7 +7,7 @@ Hay **dos formas de ejecutar el digest diario**, con la misma lógica en las dos
 
 | | Dónde corre | Cuándo | Qué manda | Depende del portátil |
 |---|---|---|---|---|
-| **GitHub Actions** | Runners de GitHub | 09:00 hora de Madrid | Noticias + repos + resumen personal | No |
+| **GitHub Actions** | Runners de GitHub | 09:00 hora de Madrid | Noticias + repos + resumen + cruce con tus proyectos | No |
 | **n8n local** | Docker en tu máquina | 11:00 hora de Madrid | Sólo noticias | Sí |
 
 La de GitHub Actions es la que no se salta días: n8n no recupera los triggers de
@@ -39,10 +39,16 @@ notic-ia/
 ├── scripts/
 │   ├── noticias_ia.py          # entrada; sección de noticias + orquestación
 │   ├── repos.py                # sección de repos en tendencia
-│   ├── resumen.py              # sección final: qué te cambia algo a vos
+│   ├── resumen.py              # qué de todo eso te cambia algo a vos
+│   ├── laboratorio.py          # cruce con tus propios proyectos
 │   ├── comun.py                # Telegram, Anthropic y utilidades compartidas
 │   ├── test_repos.py           # test con fixture de la sección de repos
-│   └── test_resumen.py         # test de la sección de resumen
+│   ├── test_resumen.py         # test de la sección de resumen
+│   └── test_laboratorio.py     # test de la sección de laboratorio
+├── laboratorio/                # tu inventario: un .md por proyecto
+│   ├── README.md               # cómo escribirlo para que el cruce funcione
+│   ├── PLANTILLA.md
+│   └── notic-ia.md             # este mismo proyecto, como ejemplo
 └── workflows/
     ├── hola-mundo.json
     ├── test-telegram.json
@@ -64,9 +70,10 @@ Abrí http://localhost:5678. La primera vez n8n pide crear una cuenta de **owner
 # Digest en GitHub Actions
 
 Ejecutado por GitHub todos los días a las **9:00 hora de Madrid**, sin que haga
-falta ningún ordenador encendido. Manda **tres secciones**, cada una en su propio
-mensaje de Telegram. Las dos primeras cuentan qué pasó; la tercera filtra todo
-eso por lo que de verdad te cambia algo.
+falta ningún ordenador encendido. Manda hasta **cuatro secciones**, cada una en
+su propio mensaje de Telegram. Las dos primeras cuentan qué pasó; la tercera
+filtra todo eso por lo que de verdad te cambia algo; la cuarta lo cruza con lo
+que estás construyendo, y sólo aparece cuando encuentra algo.
 
 ## Sección 1: noticias de IA
 
@@ -169,6 +176,45 @@ interesa y lo que se descarta aunque sea la noticia más grande del día— y es
 único sitio que hay que tocar para reorientar el filtro. Si algún día te llega
 algo que no querías, lo normal es añadir una línea ahí.
 
+## Sección 4: encaja con lo tuyo
+
+Las tres anteriores miran el mundo. Esta mira **tu inventario** —los `.md` de
+[`laboratorio/`](laboratorio/)— y contesta una sola pregunta: ¿algo de lo de hoy
+desbloquea algo tuyo?
+
+```
+laboratorio/*.md + las noticias del día + los repos en tendencia
+   └─ Claude busca cruces contra tus BLOQUEOS declarados
+      └─ 0 a 3 cruces, cada uno con qué lo desbloquea y cómo meterlo
+         └─ Enviar a Telegram, SÓLO si hay alguno
+```
+
+**El cruce se hace contra bloqueos, no contra descripciones.** Es la decisión
+que hace que esto sirva o no sirva. Un archivo que dice *"notic-ia: un digest de
+noticias"* no va a matchear nunca nada: las descripciones no tienen huecos donde
+encaje una herramienta. Uno que dice *"dependo de raspar HTML frágil porque no
+hay API"* matchea el día que salga esa API. Está explicado en
+[`laboratorio/README.md`](laboratorio/README.md), que es lo que hay que leer
+antes de escribir un proyecto nuevo.
+
+**Si no hay cruce, no manda mensaje.** Ninguno — ni uno diciendo que no hay
+nada. Un aviso que llega todos los días deja de ser un aviso. Lo normal es que
+esta sección esté callada semanas enteras.
+
+Cada cruce sale con cuatro cosas: qué bloqueo tuyo ataca, qué es exactamente lo
+que salió hoy, **cómo meterlo en ese proyecto** teniendo en cuenta el stack que
+declara tu inventario, y si la confianza es alta (🎯) o media (🤔).
+
+El nombre del proyecto se valida contra el inventario: si el modelo devuelve uno
+que no existe, se descarta con un aviso en el log.
+
+### Añadir un proyecto
+
+Copiá `laboratorio/PLANTILLA.md` a `laboratorio/<nombre>.md` y rellenalo. No hay
+que registrarlo en ningún sitio. El contenido va al modelo **tal cual, sin
+parsear**, así que el formato es libre: la plantilla es una sugerencia, no un
+esquema.
+
 ## Configuración
 
 Tres secretos en **Settings → Secrets and variables → Actions**:
@@ -190,9 +236,9 @@ salta la comprobación de hora y tiene tres opciones:
 - **ventana**: `ultimas24h` (por defecto en manual) mira las últimas 24 h desde
   este momento — el equivalente de `noticias-ia-now.json`; `ayer` reproduce
   exactamente lo que haría el cron. Sólo afecta a las noticias.
-- **secciones**: `noticias,repos,resumen` (por defecto), o un subconjunto.
-  `resumen` se envía siempre el último y necesita al menos una de las otras
-  dos, porque filtra el material que ellas recogen.
+- **secciones**: `noticias,repos,resumen,laboratorio` (por defecto), o un
+  subconjunto. `resumen` y `laboratorio` filtran el material que recogen las
+  otras dos, así que van siempre al final y no pueden pedirse solas.
 - **dry_run**: lista los candidatos y termina, sin gastar API de Anthropic ni
   mandar nada a Telegram. El equivalente barato de *Test Telegram*.
 
@@ -205,6 +251,7 @@ python scripts/noticias_ia.py --dry-run --force --secciones repos
 python scripts/noticias_ia.py --force --ventana ultimas24h      # envío real
 python scripts/test_repos.py                                    # test de la sección de repos
 python scripts/test_resumen.py                                  # test de la sección de resumen
+python scripts/test_laboratorio.py                              # test de la sección de laboratorio
 ```
 
 `--force` salta la comprobación de hora; sin él, el script sólo actúa si son las
@@ -235,7 +282,13 @@ conviene ejecutar tras tocar `repos.py`.
   responde, que es un fallo real y no un día tranquilo.
 
 - **Las secciones son independientes.** Si trending falla, las noticias llegan
-  igual, y al revés; el resumen se hace con el material que haya sobrevivido. El job termina en rojo para que se vea, pero
+  igual, y al revés; el resumen y el cruce se hacen con lo que haya sobrevivido.
+
+- **Esto no es entrenamiento.** No hay fine-tuning ni memoria: el criterio de
+  las secciones 3 y 4 vive entero en sus prompts (`PERFIL` y `EJEMPLOS` en
+  `scripts/resumen.py`, `SYSTEM` en `scripts/laboratorio.py`). Corregirlo es
+  editar esos archivos, no darle ejemplos por Telegram. A cambio, el efecto es
+  inmediato y reversible. El job termina en rojo para que se vea, pero
   lo que se pudo enviar ya salió. La marca de "ya enviado" se escribe si al menos
   una sección llegó a Telegram, así que un reintento no duplica la que sí salió.
 
