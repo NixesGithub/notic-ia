@@ -53,9 +53,24 @@ from comun import (
     trocear,
 )
 
-MAX_CANDIDATOS = 40
+MAX_CANDIDATOS = 50
 
-# "peso" = fiabilidad/relevancia editorial de la fuente (se usa para rankear).
+# (suelo, techo) por temática acotada. El suelo existe porque sin él nunca
+# entran: puntúan con palabras clave de IA que no tienen. El techo existe
+# porque con las palabras clave propias se volvieron demasiado competitivas y
+# una fuente prolífica —Adafruit publica a diario— se comía 5 de los 50 huecos.
+#
+# Música va deliberadamente por debajo: interesa, pero mucho menos que la
+# tecnología, los inventos y el trabajo de programador. Con techo 4 sobre 50
+# candidatos no puede pasar del 8% del digest, y con suelo 1 puede casi
+# desaparecer los días sin nada bueno. Fabricación alimenta la faceta de
+# inventor, así que conserva el suelo de 2.
+CUPOS = {"musica": (1, 4), "fabricacion": (2, 4)}
+
+# Suelo de peso por host. Desde que cada fuente declara el suyo en
+# construir_fuentes(), esto es sólo una red de seguridad: si un feed se añade
+# sin peso, su host todavía puede rescatarlo. El peso real es el máximo de
+# ambos. Los nombres de abajo sólo se usan en las barridas genéricas.
 PESOS = {
     "techcrunch.com": 3,
     "theverge.com": 3,
@@ -90,9 +105,22 @@ CLAVES = [
     "openai", "anthropic", "claude", "chatgpt", "gpt", "gemini", "deepmind",
     "llama", "mistral", "nvidia", "microsoft", "meta", "apple", "amazon",
     "model", "modelo", "agent", "agente", "launch", "lanza", "release",
-    "funding", "raise", "ronda", "valuation", "acquisition", "adquiere",
+    # Ojo: "funding", "raise", "ronda", "valuation" y "acquisition" estaban aquí,
+    # heredadas del diseño original. Se quitaron a propósito: premiaban las
+    # noticias de dinero, que son las que el perfil descarta explícitamente, y
+    # les hacían ganar huecos del corte a cosas que el resumen sí aprovecha.
     "regulation", "regula", "ley", "lawsuit", "demanda", "benchmark",
     "open source", "código abierto", "chip", "data center", "centro de datos",
+    # Agentes que operan solos: capacidad nueva, no producto. Está en el perfil
+    # como caso relevante, así que también tiene que puntuar en el ranking.
+    "autonomous", "autónomo", "computer use", "browser agent", "mcp",
+    "claude code", "codex", "cli", "sdk", "api",
+    # Música: sin estas, una fuente musical entra por cupo pero puntúa a cero.
+    "music", "música", "audio", "plugin", "vst", "daw", "synth", "sinte",
+    "stem", "pista", "mastering", "masterización", "voz", "sample",
+    # Fabricación y prototipado, para la faceta de inventor.
+    "3d print", "impresión 3d", "raspberry", "arduino", "esp32", "robot",
+    "cad", "prototip", "sensor", "firmware", "maker",
 ]
 
 
@@ -109,8 +137,29 @@ def url_google_news(consulta: str, idioma: str, pais: str, desde: str, hasta: st
     )
 
 
+# Repos cuyas *releases* se siguen. GitHub publica un Atom por repo sin API ni
+# credenciales: es la señal más directa que hay de "la herramienta que uso sacó
+# versión". Añadí los tuyos aquí; un repo mal escrito sale como AVISO en el log
+# y no rompe nada.
+HERRAMIENTAS_SEGUIDAS = [
+    "anthropics/claude-code",
+    "ollama/ollama",
+    "n8n-io/n8n",
+]
+
+
 def construir_fuentes(referencia: datetime) -> list[dict]:
-    """Genera las 9 URLs de RSS.
+    """Genera las URLs de todos los feeds.
+
+    Cada fuente declara su propio `peso`, y ese peso viaja con cada entrada hasta
+    el ranking (ver `leer_feeds`). Antes el peso se deducía del host del enlace,
+    lo que hundía a cualquier fuente servida por un intermediario: una entrada de
+    Anthropic vía Google News aterrizaba en `news.google.com` y cobraba peso 1,
+    el más bajo, por muy primaria que fuese la fuente.
+
+    `tematica` marca las que no son de IA para poder reservarles cupo: sin eso
+    quedan siempre fuera del corte, porque puntúan con palabras clave de IA que
+    no tienen.
 
     Google News reordena por actualidad: sin acotar fechas devuelve casi sólo el
     día en curso. Con after:/before: alrededor del día de referencia sí lo cubre.
@@ -118,16 +167,79 @@ def construir_fuentes(referencia: datetime) -> list[dict]:
     desde = (referencia - timedelta(days=1)).date().isoformat()
     hasta = (referencia + timedelta(days=1)).date().isoformat()
 
+    def gnews(consulta: str, idioma: str = "en-US", pais: str = "US") -> str:
+        return url_google_news(consulta, idioma, pais, desde, hasta)
+
     return [
+        # --- Releases de las herramientas que usás. La señal más directa. ---
+        *[
+            {"fuente": f"release: {repo}", "peso": 5,
+             "url": f"https://github.com/{repo}/releases.atom"}
+            for repo in HERRAMIENTAS_SEGUIDAS
+        ],
+
+        # --- Fuentes primarias: el anuncio, no la crónica del anuncio. ---
+        {"fuente": "OpenAI", "peso": 4, "url": "https://openai.com/news/rss.xml"},
+        {"fuente": "Hugging Face", "peso": 4, "url": "https://huggingface.co/blog/feed.xml"},
+        {"fuente": "Google DeepMind", "peso": 4, "url": "https://deepmind.google/blog/rss.xml"},
+        {"fuente": "Google Research", "peso": 4, "url": "https://research.google/blog/rss/"},
+        {"fuente": "Ollama", "peso": 4, "url": "https://ollama.com/blog/rss.xml"},
+        # Anthropic, Meta y Mistral NO publican RSS (probados y confirmados 404).
+        # Google News acotado por dominio es el único acceso, y es de segunda
+        # mano: puede llegar tarde o incompleto. El peso 4 lo compensa.
+        {"fuente": "Anthropic", "peso": 4, "url": gnews("site:anthropic.com")},
+        {"fuente": "Meta AI", "peso": 4, "url": gnews("site:ai.meta.com")},
+        {"fuente": "Mistral", "peso": 4, "url": gnews("site:mistral.ai")},
+
+        # --- Prensa. ---
         {"fuente": "TechCrunch", "peso": 3, "url": "https://techcrunch.com/category/artificial-intelligence/feed/"},
         {"fuente": "The Verge", "peso": 3, "url": "https://www.theverge.com/rss/ai-artificial-intelligence/index.xml"},
         {"fuente": "Ars Technica", "peso": 3, "url": "https://arstechnica.com/ai/feed/"},
         {"fuente": "MIT Tech Review", "peso": 3, "url": "https://www.technologyreview.com/topic/artificial-intelligence/feed"},
         {"fuente": "Wired", "peso": 2, "url": "https://www.wired.com/feed/tag/ai/latest/rss"},
         {"fuente": "VentureBeat", "peso": 2, "url": "https://venturebeat.com/category/ai/feed/"},
+        {"fuente": "InfoQ", "peso": 2, "url": "https://feed.infoq.com/ai-ml-data-eng/"},
+
+        # --- Comunidad: detecta herramientas antes que la prensa. ---
+        {"fuente": "Simon Willison", "peso": 3, "url": "https://simonwillison.net/atom/everything/"},
+        {"fuente": "Show HN", "peso": 2, "url": "https://hnrss.org/show"},
         {"fuente": "Hacker News", "peso": 2, "url": "https://hnrss.org/frontpage?q=AI+OR+LLM+OR+OpenAI+OR+Anthropic"},
-        {"fuente": "Google News (EN)", "peso": 1, "url": url_google_news("artificial intelligence", "en-US", "US", desde, hasta)},
-        {"fuente": "Google News (ES)", "peso": 1, "url": url_google_news("inteligencia artificial", "es", "ES", desde, hasta)},
+        {"fuente": "Lobsters", "peso": 2, "url": "https://lobste.rs/t/ai.rss"},
+        {"fuente": "r/LocalLLaMA", "peso": 2, "url": "https://www.reddit.com/r/LocalLLaMA/top/.rss?t=day"},
+
+        # --- Divulgación en español. Comentario, no primicia: peso medio. ---
+        {"fuente": "midudev", "peso": 2,
+         "url": "https://www.youtube.com/feeds/videos.xml?channel_id=UC3aj05GEEyzdOqYM5FLSFeg"},
+        {"fuente": "Dot CSV", "peso": 2,
+         "url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCOTko-zmnQTcOxSRdg5_uOQ"},
+        {"fuente": "Dot CSV Lab", "peso": 2,
+         "url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCy5znSnfMsDwaLlROnZ7Qbg"},
+        {"fuente": "Gentleman Programming", "peso": 2,
+         "url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCbx_d228PdYwgB4Jz202SIQ"},
+        # Sólo YouTube: lo que estos divulgadores publican en X o LinkedIn no es
+        # accesible. X cerró su API gratuita y las instancias de Nitter están
+        # caídas (nitter.net responde 410); LinkedIn no tiene RSS, redirige a
+        # login y sus términos prohíben el scraping. Un puente no oficial se
+        # rompería en silencio, que es justo lo que este repo evita.
+
+        # --- Regulación: la excepción del perfil sobre disputas con laboratorios. ---
+        {"fuente": "Regulación IA", "generica": True, "peso": 2,
+         "url": gnews("AI regulation OR lawsuit OpenAI OR Anthropic OR Google")},
+
+        # --- Música. Tienen cupo propio: con palabras clave de IA nunca llegarían. ---
+        {"fuente": "CDM", "peso": 2, "tematica": "musica", "url": "https://cdm.link/feed/"},
+        {"fuente": "Bedroom Producers", "peso": 2, "tematica": "musica",
+         "url": "https://bedroomproducersblog.com/feed/"},
+        {"fuente": "MusicTech", "peso": 2, "tematica": "musica", "url": "https://musictech.com/feed/"},
+
+        # --- Fabricación y prototipado, para la faceta de inventor. ---
+        {"fuente": "Hackaday", "peso": 2, "tematica": "fabricacion", "url": "https://hackaday.com/feed/"},
+        {"fuente": "Hackster", "peso": 2, "tematica": "fabricacion", "url": "https://www.hackster.io/news.atom"},
+        {"fuente": "Adafruit", "peso": 2, "tematica": "fabricacion", "url": "https://blog.adafruit.com/feed/"},
+
+        # --- Barrido general, al final y con el peso más bajo. ---
+        {"fuente": "Google News (EN)", "generica": True, "peso": 1, "url": gnews("artificial intelligence")},
+        {"fuente": "Google News (ES)", "generica": True, "peso": 1, "url": gnews("inteligencia artificial", "es", "ES")},
     ]
 
 
@@ -152,7 +264,16 @@ def leer_feeds(fuentes: list[dict]) -> list[dict]:
             continue
 
         log(f"  {fuente['fuente']}: {len(feed.entries)} entradas")
-        entradas.extend(feed.entries)
+        # El peso viaja con la entrada. Deducirlo del host del enlace hundía a
+        # cualquier fuente servida por un intermediario (Anthropic vía Google
+        # News acababa valiendo 1, como el barrido genérico).
+        entradas.extend({
+            "entrada": e,
+            "peso": fuente["peso"],
+            "fuente": fuente["fuente"],
+            "tematica": fuente.get("tematica", "ia"),
+            "generica": fuente.get("generica", False),
+        } for e in feed.entries)
 
     if fallos:
         for fallo in fallos:
@@ -184,11 +305,12 @@ def seleccionar(entradas: list[dict], desde: datetime, hasta: datetime) -> tuple
     por_clave: dict[str, dict] = {}
     diag = {
         "total": 0, "sinLink": 0, "sinFecha": 0,
-        "fueraDeRango": 0, "sinHost": 0, "ok": 0,
+        "fueraDeRango": 0, "sinHost": 0, "tituloCorto": 0, "ok": 0,
     }
 
-    for entrada in entradas:
+    for item in entradas:
         diag["total"] += 1
+        entrada = item["entrada"]
 
         link = entrada.get("link") or entrada.get("id") or ""
         if not link:
@@ -211,25 +333,40 @@ def seleccionar(entradas: list[dict], desde: datetime, hasta: datetime) -> tuple
         diag["ok"] += 1
 
         titulo = limpiar_html(entrada.get("title"))
-        fuente = NOMBRES.get(host, host)
+        # El nombre declarado por el feed manda: es más preciso que adivinarlo
+        # por el host. Sólo las barridas genéricas necesitan que se deduzca.
+        fuente = item["fuente"] if not item["generica"] else NOMBRES.get(host, host)
 
-        # Google News agrega " - Medio" al final del título; lo separamos.
+        # Google News agrega " - Medio" al final del título. En las barridas eso
+        # identifica al medio real; en las acotadas por dominio ya lo sabemos.
         if host == "news.google.com":
             partes = titulo.split(" - ")
             if len(partes) > 1:
-                fuente = partes.pop().strip()
+                if item["generica"]:
+                    fuente = partes.pop().strip()
+                else:
+                    partes.pop()
                 titulo = " - ".join(partes).strip()
-            else:
+            elif item["generica"]:
                 fuente = "Google News"
 
-        clave = " ".join(normalizar(titulo).split(" ")[:9])
+        palabras = normalizar(titulo).split(" ")
+        clave = " ".join(palabras[:9])
         if not clave:
+            continue
+        # Acotar un feed por dominio arrastra páginas que no son noticias
+        # ("Jobs", "Careers", "Pricing"). Un titular de verdad no baja de tres
+        # palabras, así que ese es el corte más barato y menos arbitrario.
+        if len(palabras) < 3:
+            diag["tituloCorto"] += 1
             continue
 
         extracto = limpiar_html(entrada.get("summary") or entrada.get("description"))
         texto = normalizar(f"{titulo} {extracto}")
         aciertos = sum(1 for k in CLAVES if normalizar(k) in texto)
-        peso = PESOS.get(host, 1)
+        # El peso del feed es un suelo, no un sustituto: en las barridas el host
+        # sigue mandando, porque ahí cada entrada viene de un medio distinto.
+        peso = max(PESOS.get(host, 1), item["peso"])
 
         existente = por_clave.get(clave)
         if existente:
@@ -243,6 +380,7 @@ def seleccionar(entradas: list[dict], desde: datetime, hasta: datetime) -> tuple
             "titulo": titulo,
             "url": link,
             "fuente": fuente,
+            "tematica": item["tematica"],
             "hora": fecha.strftime("%H:%M"),
             "extracto": extracto[:300],
             "peso": peso,
@@ -258,7 +396,58 @@ def seleccionar(entradas: list[dict], desde: datetime, hasta: datetime) -> tuple
             candidatos.append(c)
 
     candidatos.sort(key=lambda c: c["score"], reverse=True)
-    return candidatos[:MAX_CANDIDATOS], diag
+    return aplicar_cupos(candidatos, MAX_CANDIDATOS, CUPOS), diag
+
+
+def aplicar_cupos(
+    ordenados: list[dict], maximo: int, cupos: dict[str, tuple[int, int]]
+) -> list[dict]:
+    """Corta en `maximo` respetando un suelo y un techo por temática acotada.
+
+    Las noticias de música o electrónica no llevan las palabras clave de IA, así
+    que por ranking puro quedarían siempre fuera y esas fuentes serían
+    decorativas: de ahí el suelo. Pero con sus propias palabras clave pasaron a
+    competir de más, y una fuente que publica a diario acaparaba el corte: de ahí
+    el techo. El hueco se le quita o se le da siempre a la peor de IA, nunca a
+    otra temática acotada.
+    """
+    seleccion = list(ordenados[:maximo])
+    pendientes = list(ordenados[maximo:])
+
+    def cuantas(tema: str) -> int:
+        return sum(1 for c in seleccion if c["tematica"] == tema)
+
+    def sacar_peor(tema: str) -> dict | None:
+        for k in range(len(seleccion) - 1, -1, -1):
+            if seleccion[k]["tematica"] == tema:
+                return seleccion.pop(k)
+        return None
+
+    def coger_mejor(tema: str) -> dict | None:
+        for k, c in enumerate(pendientes):
+            if c["tematica"] == tema:
+                return pendientes.pop(k)
+        return None
+
+    # Techo primero: libera huecos que el suelo de otra temática podría usar.
+    for tema, (_, techo) in cupos.items():
+        while cuantas(tema) > techo:
+            sacar_peor(tema)
+            relleno = coger_mejor("ia")
+            if relleno is not None:
+                seleccion.append(relleno)
+
+    for tema, (suelo, _) in cupos.items():
+        while cuantas(tema) < suelo:
+            entrante = coger_mejor(tema)
+            if entrante is None:
+                break  # no hay candidatos de esa temática
+            if len(seleccion) >= maximo and sacar_peor("ia") is None:
+                break  # no queda nada de IA que sacrificar
+            seleccion.append(entrante)
+
+    seleccion.sort(key=lambda c: c["score"], reverse=True)
+    return seleccion
 
 
 # --------------------------------------------------------------------------

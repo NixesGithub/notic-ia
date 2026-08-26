@@ -8,6 +8,30 @@ A local [n8n](https://n8n.io) instance run with Docker Compose, where **workflow
 as JSON** under `workflows/` and are imported into n8n on every startup. There is no `package.json`,
 no build, and no test suite — the deliverable is the compose file plus the workflow JSONs.
 
+**Sources declare their own weight, and that weight travels with each entry.** It used to be derived
+from the *link's* host, which sank any source served through an intermediary — an Anthropic item
+arriving via Google News landed on `news.google.com` and scored the minimum, however primary the
+source. `leer_feeds` now tags every entry with its feed's weight, name and theme, and `seleccionar`
+takes `max(PESOS[host], feed_weight)`. Adding a feed without a weight is the silent failure this
+guards against: it enters at the floor and the cut expels it forever, which reads as a poor feed
+rather than a misconfiguration. `test_fuentes.py` is the structural guard.
+
+**Primary sources outrank the press deliberately** (4 vs 3): the announcement, not the write-up of
+the announcement. This also sharpens the existing dedupe — lab post plus five write-ups collapse
+into one entry with `apariciones: 6`.
+
+**`CUPOS` is a floor *and* a ceiling per off-topic theme.** Music and fabrication items carry none of
+the AI keywords the ranking scores on, so without a floor they never enter and those feeds are
+decorative; once given their own keywords they over-competed and one prolific blog took 5 of 50
+slots, hence the ceiling. Slots are always taken from or given to the worst `ia` item, never another
+capped theme.
+
+**Things deliberately left out, with the reason** — do not "helpfully" add them back: arXiv (`cs.AI`
+alone is 352 entries/day and would drown the cut); X and LinkedIn for the Spanish-speaking educators
+(no free API, Nitter instances are gone — `nitter.net` returns 410 — and LinkedIn forbids scraping,
+so any bridge breaks silently); and the funding/valuation/acquisition keywords that used to be in
+`CLAVES` (they boosted exactly the news the owner's profile discards).
+
 **`laboratorio` crosses the day against the owner's own backlog, and stays silent by default.**
 `laboratorio/*.md` is a hand-written inventory, one file per project; its contents go to the model
 verbatim — deliberately unparsed, so any format a human writes works and no parser can fail silently.
@@ -114,6 +138,7 @@ pip install -r requirements.txt
 python scripts/noticias_ia.py --dry-run --force                 # rank candidates, call nothing
 python scripts/noticias_ia.py --dry-run --force --secciones repos
 python scripts/noticias_ia.py --force --ventana ultimas24h      # real send, last 24 h
+python scripts/test_fuentes.py                                  # source-list structure
 python scripts/test_repos.py                                    # fixture test, no network
 python scripts/test_resumen.py                                  # summary test, no network
 python scripts/test_laboratorio.py                              # lab cross-reference test
