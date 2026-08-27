@@ -43,6 +43,7 @@ notic-ia/
 │   ├── laboratorio.py          # cruce con tus propios proyectos
 │   ├── comun.py                # Telegram, Anthropic y utilidades compartidas
 │   ├── test_proveedor.py       # test del cambio de proveedor
+│   ├── test_ventana.py         # test de la ventana horaria y los reintentos
 │   ├── test_fuentes.py         # test estructural de la lista de fuentes
 │   ├── test_repos.py           # test con fixture de la sección de repos
 │   ├── test_resumen.py         # test de la sección de resumen
@@ -373,6 +374,7 @@ python scripts/noticias_ia.py --dry-run --force                 # ver candidatos
 python scripts/noticias_ia.py --dry-run --force --secciones repos
 python scripts/noticias_ia.py --force --ventana ultimas24h      # envío real
 python scripts/test_proveedor.py                                # test del cambio de proveedor
+python scripts/test_ventana.py                                  # test de la ventana horaria
 python scripts/test_fuentes.py                                  # test de la lista de fuentes
 python scripts/test_repos.py                                    # test de la sección de repos
 python scripts/test_resumen.py                                  # test de la sección de resumen
@@ -390,10 +392,22 @@ conviene ejecutar tras tocar `repos.py`.
 
 - **El cron de GitHub Actions sólo entiende UTC, y Madrid cambia con el horario
   de verano.** Un cron fijo daría las 9:00 media parte del año y las 8:00 o las
-  10:00 la otra. Por eso el workflow dispara a **las 07:00 y las 08:00 UTC** y es
-  el script el que comprueba si son las 9 en `Europe/Madrid`; la ejecución que no
-  toca sale sin hacer nada. Si cambiás `DIGEST_TZ` o `DIGEST_HOUR` en el
-  workflow, acordate de mover también esas dos horas UTC del `cron`.
+  10:00 la otra. Por eso el workflow dispara a **las 07:00, 08:00, 09:00 y 10:00
+  UTC** y es el script el que comprueba la hora en `Europe/Madrid`; las
+  ejecuciones que no tocan salen sin hacer nada. Si cambiás `DIGEST_TZ` o
+  `DIGEST_HOUR` en el workflow, acordate de mover también esas horas UTC del
+  `cron` y de revisar que `DIGEST_MARGEN_HORAS` siga cubriendo la última.
+
+- **GitHub descarta ejecuciones programadas, no sólo las retrasa.** El
+  27/08/2026 no salió ninguno de los dos disparos que había entonces y ese día no
+  hubo digest. Por eso hay cuatro y no dos: el script acepta el digest en una
+  *ventana* (de `DIGEST_HOUR` a `DIGEST_HOUR + DIGEST_MARGEN_HORAS`, o sea de
+  9:00 a 12:59) en vez de exigir la hora exacta, así que si GitHub se come el
+  disparo de las 9:00 lo recoge el siguiente. Nunca antes de la hora pedida: un
+  digest de las 9 no sale a las 8. Reintentar es gratis porque **la marca de
+  caché es lo único que impide el envío doble** — si tocás el cron, no la quites.
+  `test_ventana.py` calcula las horas locales desde el YAML de verdad, con una
+  fecha de verano y otra de invierno.
 
 - **GitHub no garantiza la puntualidad de los crons.** En horas punta la
   ejecución puede retrasarse bastantes minutos. Como la comprobación es sobre la

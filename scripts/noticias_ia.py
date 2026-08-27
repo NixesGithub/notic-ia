@@ -45,8 +45,10 @@ import resumen
 from comun import (
     AGENTE,
     HORA_DIGEST,
+    MARGEN_HORAS,
     ZONA,
     clave_api,
+    en_ventana,
     escapar,
     enviar_telegram,
     fecha_en_espanol,
@@ -614,7 +616,8 @@ def main() -> int:
     )
     parser.add_argument(
         "--force", action="store_true",
-        help="Salta la comprobación de que sean las %d:00 en la zona configurada." % HORA_DIGEST,
+        help="Salta la comprobación de que la hora local esté en la ventana del digest "
+             "(de las %d:00 a las %d:59)." % (HORA_DIGEST, HORA_DIGEST + MARGEN_HORAS),
     )
     parser.add_argument(
         "--dry-run", action="store_true",
@@ -653,13 +656,13 @@ def main() -> int:
     ahora = datetime.now(ZONA)
 
     # El cron de GitHub Actions sólo entiende UTC, así que el workflow dispara a
-    # dos horas UTC distintas y es aquí donde se decide cuál corresponde a la
-    # hora local pedida. Así el digest sale a la misma hora todo el año, con y
-    # sin horario de verano.
-    if not args.force and ahora.hour != HORA_DIGEST:
+    # varias horas UTC y es aquí donde se decide cuáles caen dentro de la ventana
+    # local. Así el digest sale a la misma hora todo el año, con y sin horario de
+    # verano, y sobrevive a que GitHub descarte alguno de los disparos.
+    if not args.force and not en_ventana(ahora.hour):
         log(
-            f"Son las {ahora:%H:%M} en {ZONA.key} y el digest es a las {HORA_DIGEST}:00. "
-            "No toca: salgo sin hacer nada."
+            f"Son las {ahora:%H:%M} en {ZONA.key} y el digest es a las {HORA_DIGEST}:00 "
+            f"(admito hasta las {HORA_DIGEST + MARGEN_HORAS}:59). No toca: salgo sin hacer nada."
         )
         return 0
 
