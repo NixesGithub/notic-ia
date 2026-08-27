@@ -20,6 +20,10 @@ from zoneinfo import ZoneInfo
 # está definida, y entonces el default de get() nunca se aplica.
 ZONA = ZoneInfo(os.environ.get("DIGEST_TZ") or "Europe/Madrid")
 HORA_DIGEST = int(os.environ.get("DIGEST_HOUR") or "9")
+# GitHub descarta ejecuciones programadas cuando la plataforma va cargada, así que
+# el workflow dispara varias veces y aceptamos el digest dentro de una ventana en
+# vez de exigir la hora exacta. Quien impide el envío doble es la marca de caché.
+MARGEN_HORAS = int(os.environ.get("DIGEST_MARGEN_HORAS") or "3")
 
 # Muchos servidores rechazan el User-Agent por defecto de urllib con un 403.
 AGENTE = "Mozilla/5.0 (compatible; notic-ia/1.0; +https://github.com/NixesGithub/notic-ia)"
@@ -60,6 +64,16 @@ def escapar(texto) -> str:
 
 def fecha_en_espanol(dia: datetime) -> str:
     return f"{dia.day} de {MESES_ES[dia.month - 1]} de {dia.year}"
+
+
+def en_ventana(hora: int) -> bool:
+    """¿Esa hora local es una a la que el digest todavía puede salir?
+
+    La hora del digest es el único momento *deseable*; el margen existe sólo para
+    recuperar los disparos que GitHub descarta o retrasa. Nunca antes de la hora
+    pedida: un digest de las 9 no puede salir a las 8.
+    """
+    return HORA_DIGEST <= hora <= HORA_DIGEST + MARGEN_HORAS
 
 
 # --------------------------------------------------------------------------

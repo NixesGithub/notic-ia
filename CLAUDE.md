@@ -162,6 +162,7 @@ python scripts/noticias_ia.py --dry-run --force                 # rank candidate
 python scripts/noticias_ia.py --dry-run --force --secciones repos
 python scripts/noticias_ia.py --force --ventana ultimas24h      # real send, last 24 h
 python scripts/test_proveedor.py                                # provider swap, both shapes
+python scripts/test_ventana.py                                  # digest window, DST + retries
 python scripts/test_fuentes.py                                  # source-list structure
 python scripts/test_repos.py                                    # fixture test, no network
 python scripts/test_resumen.py                                  # summary test, no network
@@ -222,10 +223,23 @@ Credentials are *not* in the JSON — they live encrypted in the DB (keyed by `N
 so re-importing never forces credential reconfiguration.
 
 **The GitHub Actions cron is UTC-only and Madrid observes DST.** A fixed cron would drift an hour
-for half the year, so the workflow fires at **07:00 and 08:00 UTC** and `noticias_ia.py` checks
-whether it is `DIGEST_HOUR` in `DIGEST_TZ`, exiting 0 on the run that does not match. Changing the
-timezone or the hour means changing *both* the env vars and the two UTC cron hours. A marker in the
-Actions cache (`noticias-ia-enviado-<date>`) stops a badly delayed runner from sending twice.
+for half the year, so the workflow fires at **07:00, 08:00, 09:00 and 10:00 UTC** and
+`noticias_ia.py` checks the local hour in `DIGEST_TZ`, exiting 0 on the runs that do not match.
+Changing the timezone or the hour means changing *both* the env vars and those UTC cron hours.
+
+**Scheduled runs get dropped, not just delayed.** On 2026-08-27 neither of the two crons that
+existed then fired at all and no digest went out. Hence four fires, and hence `en_ventana`: the
+guard accepts any local hour in `[DIGEST_HOUR, DIGEST_HOUR + DIGEST_MARGEN_HORAS]` (09:00–12:59)
+instead of demanding the exact hour — an exact-hour guard makes extra crons useless, because
+09:00 UTC is 11:00 local and the script would exit. Never *before* the requested hour: a 09:00
+digest must not go out at 08:00. `DIGEST_MARGEN_HORAS` has to cover the last cron (10:00 UTC =
+12:00 in summer), so widening the cron means rechecking the margin.
+
+Retries are only free because the marker in the Actions cache (`noticias-ia-enviado-<date>`) makes
+the first run of the day the only one that sends. **That marker is now load-bearing, not a
+nicety** — with four fires inside the window, removing it means four digests. `test_ventana.py`
+derives the local hours from the real YAML for a summer and a winter date, so it fails if the cron
+and the margin drift apart.
 
 ## Gotchas that cost real debugging time
 
