@@ -44,6 +44,7 @@ notic-ia/
 │   ├── comun.py                # Telegram, Anthropic y utilidades compartidas
 │   ├── test_proveedor.py       # test del cambio de proveedor
 │   ├── test_ventana.py         # test de la ventana horaria y los reintentos
+│   ├── test_telegram.py        # test de los reintentos de envío
 │   ├── test_fuentes.py         # test estructural de la lista de fuentes
 │   ├── test_repos.py           # test con fixture de la sección de repos
 │   ├── test_resumen.py         # test de la sección de resumen
@@ -375,6 +376,7 @@ python scripts/noticias_ia.py --dry-run --force --secciones repos
 python scripts/noticias_ia.py --force --ventana ultimas24h      # envío real
 python scripts/test_proveedor.py                                # test del cambio de proveedor
 python scripts/test_ventana.py                                  # test de la ventana horaria
+python scripts/test_telegram.py                                 # test de los reintentos de envío
 python scripts/test_fuentes.py                                  # test de la lista de fuentes
 python scripts/test_repos.py                                    # test de la sección de repos
 python scripts/test_resumen.py                                  # test de la sección de resumen
@@ -389,6 +391,20 @@ fixture y comprueba el filtrado, el ranking y el formateo del mensaje. Es lo que
 conviene ejecutar tras tocar `repos.py`.
 
 ## Cosas que conviene saber
+
+- **Una sección no puede caerse por un fallo de red suelto.** El 27/08 el primer
+  mensaje de `noticias` dio un read timeout y se llevó la sección entera por
+  delante, con tres secciones aún por enviar. El envío a Telegram reintenta lo
+  transitorio (timeouts, 429 respetando el `retry_after` que manda Telegram, y
+  5xx) con espera creciente, y se rinde a la primera con cualquier otro 4xx:
+  eso es token mal, chat_id mal o HTML inválido, y no mejora por insistir.
+  Reintentar un timeout puede duplicar un mensaje que sí había entrado; se
+  prefiere eso a perder la sección.
+
+- **La marca del día se guarda aunque una sección falle.** El paso que la
+  cachea lleva `always()`: un `if:` sin función de estado arrastra un
+  `success()` implícito, y sin eso una sección caída dejaba el digest sin
+  marcar y el siguiente disparo de la ventana reenviaba lo que sí había salido.
 
 - **El cron de GitHub Actions sólo entiende UTC, y Madrid cambia con el horario
   de verano.** Un cron fijo daría las 9:00 media parte del año y las 8:00 o las

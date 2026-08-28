@@ -264,15 +264,24 @@ def trocear(bloques: list[str], limite: int = LIMITE_TELEGRAM) -> list[str]:
     return mensajes
 
 
-def enviar_telegram(mensajes: list[str], token: str, chat_id: str) -> None:
-    for i, mensaje in enumerate(mensajes, start=1):
-        datos = json.dumps({
-            "chat_id": chat_id,
-            "text": mensaje,
-            "parse_mode": "HTML",
-            "disable_web_page_preview": True,
-        }).encode("utf-8")
+def _espera_429(cuerpo: str, intento: int) -> float:
+    """Telegram dice en el cuerpo cuánto esperar; si no lo dice, backoff normal."""
+    try:
+        return float(json.loads(cuerpo)["parameters"]["retry_after"])
+    except (ValueError, KeyError, TypeError):
+        return 2 ** intento
 
+
+def _enviar_uno(mensaje: str, token: str, chat_id: str, etiqueta: str, reintentos: int) -> None:
+    datos = json.dumps({
+        "chat_id": chat_id,
+        "text": mensaje,
+        "parse_mode": "HTML",
+        "disable_web_page_preview": True,
+    }).encode("utf-8")
+    ultimo_error = ""
+
+    for intento in range(1, reintentos + 1):
         peticion = urllib.request.Request(
             f"https://api.telegram.org/bot{token}/sendMessage",
             data=datos,
@@ -282,10 +291,35 @@ def enviar_telegram(mensajes: list[str], token: str, chat_id: str) -> None:
         try:
             with urllib.request.urlopen(peticion, timeout=60) as respuesta:
                 respuesta.read()
+            return
         except urllib.error.HTTPError as exc:
             cuerpo = exc.read().decode("utf-8", "replace")[:300]
-            raise RuntimeError(f"Telegram devolvió HTTP {exc.code}: {cuerpo}") from exc
+            ultimo_error = f"HTTP {exc.code}: {cuerpo}"
+            # Un 4xx que no sea rate limit es culpa nuestra —token mal, chat_id
+            # mal, HTML inválido— y reintentar no lo arregla.
+            if exc.code != 429 and exc.code < 500:
+                break
+            espera = _espera_429(cuerpo, intento) if exc.code == 429 else 2 ** intento
+        except (urllib.error.URLError, TimeoutError) as exc:
+            # Esto es lo que tumbó la sección de noticias el 27/08: un read
+            # timeout en el primer mensaje mataba la sección entera. Si la
+            # petición llegó a entrar, reintentar puede duplicar ese mensaje;
+            # es preferible a perder la sección.
+            ultimo_error = str(exc)
+            espera = 2 ** intento
 
-        log(f"  mensaje {i}/{len(mensajes)} enviado ({len(mensaje)} caracteres)")
+        if intento < reintentos:
+            log(f"  reintento {intento}/{reintentos - 1} del mensaje {etiqueta} "
+                f"en {espera:g}s ({ultimo_error})")
+            time.sleep(espera)
+
+    raise RuntimeError(f"Telegram falló en el mensaje {etiqueta}: {ultimo_error}")
+
+
+def enviar_telegram(mensajes: list[str], token: str, chat_id: str, reintentos: int = 3) -> None:
+    for i, mensaje in enumerate(mensajes, start=1):
+        etiqueta = f"{i}/{len(mensajes)}"
+        _enviar_uno(mensaje, token, chat_id, etiqueta, reintentos)
+        log(f"  mensaje {etiqueta} enviado ({len(mensaje)} caracteres)")
         if i < len(mensajes):
             time.sleep(1)  # el límite de Telegram es ~30 mensajes/segundo

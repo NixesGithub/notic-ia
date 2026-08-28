@@ -163,6 +163,7 @@ python scripts/noticias_ia.py --dry-run --force --secciones repos
 python scripts/noticias_ia.py --force --ventana ultimas24h      # real send, last 24 h
 python scripts/test_proveedor.py                                # provider swap, both shapes
 python scripts/test_ventana.py                                  # digest window, DST + retries
+python scripts/test_telegram.py                                 # Telegram retries, no network
 python scripts/test_fuentes.py                                  # source-list structure
 python scripts/test_repos.py                                    # fixture test, no network
 python scripts/test_resumen.py                                  # summary test, no network
@@ -242,6 +243,20 @@ derives the local hours from the real YAML for a summer and a winter date, so it
 and the margin drift apart.
 
 ## Gotchas that cost real debugging time
+
+**A step `if:` without a status function carries an implicit `success()`.** The "Anotar que ya
+salió" step guards on `hashFiles('.enviado/**')`, which reads like it only depends on the file — but
+the script exits 1 when *any* section fails, so without `always()` the step is skipped, the marker
+is never cached, and the next fire in the window resends every section that had worked. That got
+much worse once the window allowed four fires instead of one. `always() && …` is load-bearing.
+
+**One flaky HTTP call used to kill a whole section.** `enviar_telegram` caught only `HTTPError`, so
+a read timeout propagated: on 2026-08-27 the first Telegram message of `noticias` timed out and the
+section died with three sections still to go. Both API callers now share one retry policy — retry
+`URLError`/`TimeoutError`, 429 (honouring Telegram's `retry_after`) and 5xx with exponential
+backoff; give up immediately on any other 4xx, which means a bad token, a bad chat id or invalid
+HTML and never gets better by insisting. Retrying a timeout can duplicate a message that did land;
+that is the accepted trade against losing the section. `test_telegram.py` covers both directions.
 
 **`import:workflow` always deactivates everything it imports.** The `--activeState=fromJson` flag
 that would fix this only works in queue/multi-main mode and hard-fails in a normal single instance.
