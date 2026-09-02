@@ -44,6 +44,7 @@ notic-ia/
 │   ├── comun.py                # Telegram, Anthropic y utilidades compartidas
 │   ├── test_proveedor.py       # test del cambio de proveedor
 │   ├── test_ventana.py         # test de la ventana horaria y los reintentos
+│   ├── test_telegram.py        # test de los reintentos de envío
 │   ├── test_fuentes.py         # test estructural de la lista de fuentes
 │   ├── test_repos.py           # test con fixture de la sección de repos
 │   ├── test_resumen.py         # test de la sección de resumen
@@ -375,6 +376,7 @@ python scripts/noticias_ia.py --dry-run --force --secciones repos
 python scripts/noticias_ia.py --force --ventana ultimas24h      # envío real
 python scripts/test_proveedor.py                                # test del cambio de proveedor
 python scripts/test_ventana.py                                  # test de la ventana horaria
+python scripts/test_telegram.py                                 # test de los reintentos de envío
 python scripts/test_fuentes.py                                  # test de la lista de fuentes
 python scripts/test_repos.py                                    # test de la sección de repos
 python scripts/test_resumen.py                                  # test de la sección de resumen
@@ -390,31 +392,40 @@ conviene ejecutar tras tocar `repos.py`.
 
 ## Cosas que conviene saber
 
+- **Una sección no puede caerse por un fallo de red suelto.** El 27/08 el primer
+  mensaje de `noticias` dio un read timeout y se llevó la sección entera por
+  delante, con tres secciones aún por enviar. El envío a Telegram reintenta lo
+  transitorio (timeouts, 429 respetando el `retry_after` que manda Telegram, y
+  5xx) con espera creciente, y se rinde a la primera con cualquier otro 4xx:
+  eso es token mal, chat_id mal o HTML inválido, y no mejora por insistir.
+  Reintentar un timeout puede duplicar un mensaje que sí había entrado; se
+  prefiere eso a perder la sección.
+
+- **La marca del día se guarda aunque una sección falle.** El paso que la
+  cachea lleva `always()`: un `if:` sin función de estado arrastra un
+  `success()` implícito, y sin eso una sección caída dejaba el digest sin
+  marcar y el siguiente disparo de la ventana reenviaba lo que sí había salido.
+
 - **El cron de GitHub Actions sólo entiende UTC, y Madrid cambia con el horario
-  de verano.** Un cron fijo daría las 9:00 media parte del año y las 8:00 o las
-  10:00 la otra. Por eso el workflow dispara a **las 07:00, 08:00, 09:00 y 10:00
-  UTC** y es el script el que comprueba la hora en `Europe/Madrid`; las
-  ejecuciones que no tocan salen sin hacer nada. Si cambiás `DIGEST_TZ` o
-  `DIGEST_HOUR` en el workflow, acordate de mover también esas horas UTC del
-  `cron` y de revisar que `DIGEST_MARGEN_HORAS` siga cubriendo la última.
+  de verano.** Por eso el workflow dispara a varias horas UTC (07, 08, 09 y 10) y
+  es el script el que decide en tiempo de ejecución si la hora local en
+  `Europe/Madrid` cae en la ventana del digest; las ejecuciones que no tocan
+  salen sin hacer nada.
 
-- **GitHub descarta ejecuciones programadas, no sólo las retrasa.** El
-  27/08/2026 no salió ninguno de los dos disparos que había entonces y ese día no
-  hubo digest. Por eso hay cuatro y no dos: el script acepta el digest en una
-  *ventana* (de `DIGEST_HOUR` a `DIGEST_HOUR + DIGEST_MARGEN_HORAS`, o sea de
-  9:00 a 12:59) en vez de exigir la hora exacta, así que si GitHub se come el
-  disparo de las 9:00 lo recoge el siguiente. Nunca antes de la hora pedida: un
-  digest de las 9 no sale a las 8. Reintentar es gratis porque **la marca de
-  caché es lo único que impide el envío doble** — si tocás el cron, no la quites.
-  `test_ventana.py` calcula las horas locales desde el YAML de verdad, con una
-  fecha de verano y otra de invierno.
-
-- **GitHub no garantiza la puntualidad de los crons.** En horas punta la
-  ejecución puede retrasarse bastantes minutos. Como la comprobación es sobre la
-  *hora* y no sobre el minuto exacto, el digest sale igual. Si el retraso fuese
-  tan grande que las dos ejecuciones del día cayesen dentro de la hora del
-  digest, una marca guardada en la caché de Actions
-  (`noticias-ia-enviado-<fecha>`) evita que llegue por duplicado.
+- **GitHub NO entrega el `schedule` cerca de la hora pedida.** No es una
+  cuestión de minutos, ni de que a veces se pierda un disparo de los varios que
+  hay: en la primera semana real en producción (29/08 al 02/09/2026) llegó **un
+  único evento al día**, entre 3 y 12 horas tarde (12:03, 12:30, 15:00, 12:45,
+  13:07 y 19:22 UTC, contra un cron a las 7-10 UTC), y el 27/08 no llegó
+  ninguno. Tener varias horas de cron no ayuda contra esto — GitHub igual sólo
+  entrega uno, tarde. La única defensa real es una ventana ancha: el script
+  acepta el digest de `DIGEST_HOUR` a `DIGEST_HOUR + DIGEST_MARGEN_HORAS` (por
+  defecto 14h, o sea hasta las 23:59) en vez de exigir la hora exacta, para no
+  rechazar el único disparo que llega. Nunca antes de la hora pedida: un digest
+  de las 9 no sale a las 8. **La marca de caché es lo único que impide el envío
+  doble** si alguna vez llegara más de un evento el mismo día — si tocás el
+  margen o el cron, no la quites. `test_ventana.py` comprueba con el margen por
+  defecto que esas horas reales de entrega entran en la ventana.
 
 - **Una fuente caída no tumba el digest.** Cada feed se lee por separado y los
   fallos quedan como aviso en el log del job. Sí aborta si *ninguna* fuente

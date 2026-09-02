@@ -163,6 +163,7 @@ python scripts/noticias_ia.py --dry-run --force --secciones repos
 python scripts/noticias_ia.py --force --ventana ultimas24h      # real send, last 24 h
 python scripts/test_proveedor.py                                # provider swap, both shapes
 python scripts/test_ventana.py                                  # digest window, DST + retries
+python scripts/test_telegram.py                                 # Telegram retries, no network
 python scripts/test_fuentes.py                                  # source-list structure
 python scripts/test_repos.py                                    # fixture test, no network
 python scripts/test_resumen.py                                  # summary test, no network
@@ -227,21 +228,41 @@ for half the year, so the workflow fires at **07:00, 08:00, 09:00 and 10:00 UTC*
 `noticias_ia.py` checks the local hour in `DIGEST_TZ`, exiting 0 on the runs that do not match.
 Changing the timezone or the hour means changing *both* the env vars and those UTC cron hours.
 
-**Scheduled runs get dropped, not just delayed.** On 2026-08-27 neither of the two crons that
-existed then fired at all and no digest went out. Hence four fires, and hence `en_ventana`: the
-guard accepts any local hour in `[DIGEST_HOUR, DIGEST_HOUR + DIGEST_MARGEN_HORAS]` (09:00–12:59)
-instead of demanding the exact hour — an exact-hour guard makes extra crons useless, because
-09:00 UTC is 11:00 local and the script would exit. Never *before* the requested hour: a 09:00
-digest must not go out at 08:00. `DIGEST_MARGEN_HORAS` has to cover the last cron (10:00 UTC =
-12:00 in summer), so widening the cron means rechecking the margin.
+**GitHub does not deliver `schedule` anywhere near the requested time.** This isn't a "the cron
+occasionally gets dropped" problem — it's that the delay is the normal case. On 2026-08-27 neither
+of the two crons that existed then fired at all. Then, with four crons (07-10 UTC) and a 3h window
+(09:00-12:59 local), *every single scheduled run for a week* (2026-08-29 through 09-02, runs #8-13)
+missed the window: GitHub delivered exactly one `schedule` event per day, 3 to 12 hours late
+(12:03, 12:30, 15:00, 12:45, 13:07, 19:22 UTC — none within 3h of the 07-10 UTC cron), and
+`en_ventana` rejected all six. Having multiple cron entries doesn't help against this: GitHub
+still only delivers one event, just a late one — so the fix is not more crons, it's a wide enough
+window to not reject the one that arrives. `DIGEST_MARGEN_HORAS` defaults to 14 (09:00-23:59) for
+exactly this reason; if you find yourself narrowing it, first check whether GitHub's actual
+delivery lag has improved, not just assume the old 3h reasoning still holds. Never *before* the
+requested hour: a 09:00 digest must not go out at 08:00.
 
-Retries are only free because the marker in the Actions cache (`noticias-ia-enviado-<date>`) makes
-the first run of the day the only one that sends. **That marker is now load-bearing, not a
-nicety** — with four fires inside the window, removing it means four digests. `test_ventana.py`
-derives the local hours from the real YAML for a summer and a winter date, so it fails if the cron
-and the margin drift apart.
+The marker in the Actions cache (`noticias-ia-enviado-<date>`) is what prevents a double send if
+more than one `schedule` event ever does land the same day — with a 14h window that's the only
+thing standing between a good day and duplicate digests, so don't remove it when touching the
+cron or the margin. `test_ventana.py` checks the *default* margin (not a hardcoded test value)
+against the actual UTC hours GitHub delivered in that first production week, converted to Madrid
+local time — so it fails if the margin ever gets narrowed below what GitHub actually does.
 
 ## Gotchas that cost real debugging time
+
+**A step `if:` without a status function carries an implicit `success()`.** The "Anotar que ya
+salió" step guards on `hashFiles('.enviado/**')`, which reads like it only depends on the file — but
+the script exits 1 when *any* section fails, so without `always()` the step is skipped, the marker
+is never cached, and the next fire in the window resends every section that had worked. That got
+much worse once the window allowed four fires instead of one. `always() && …` is load-bearing.
+
+**One flaky HTTP call used to kill a whole section.** `enviar_telegram` caught only `HTTPError`, so
+a read timeout propagated: on 2026-08-27 the first Telegram message of `noticias` timed out and the
+section died with three sections still to go. Both API callers now share one retry policy — retry
+`URLError`/`TimeoutError`, 429 (honouring Telegram's `retry_after`) and 5xx with exponential
+backoff; give up immediately on any other 4xx, which means a bad token, a bad chat id or invalid
+HTML and never gets better by insisting. Retrying a timeout can duplicate a message that did land;
+that is the accepted trade against losing the section. `test_telegram.py` covers both directions.
 
 **`import:workflow` always deactivates everything it imports.** The `--activeState=fromJson` flag
 that would fix this only works in queue/multi-main mode and hard-fails in a normal single instance.
