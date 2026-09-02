@@ -3,9 +3,14 @@
 
 El cron de Actions es UTC y Madrid cambia de offset dos veces al año, así que las
 horas locales no se escriben a mano: se calculan desde las horas UTC del workflow
-con una fecha de verano y otra de invierno. Lo que importa es que el digest salga
-a las 9:00 en las dos estaciones, que nunca salga antes, y que los disparos de
-reserva de después de las 9:00 sí se acepten (si no, reintentar no sirve de nada).
+con una fecha de verano y otra de invierno.
+
+El mecanismo se prueba con un margen fijo de 3h (independiente de lo que diga el
+workflow). Aparte, se comprueba con el MARGEN_HORAS por defecto real que las horas
+en las que GitHub entregó de verdad el `schedule` la primera semana en producción
+(29/08-02/09: 12:03, 12:30, 15:00, 12:45, 13:07 y 19:22 UTC, siempre un único
+evento al día y nunca dentro de 3 horas del cron) caen dentro de la ventana. Si se
+reduce el margen por debajo de lo que GitHub tarda de verdad, este test lo avisa.
 """
 
 from __future__ import annotations
@@ -102,6 +107,19 @@ def main() -> int:
     comprobar(not c0.en_ventana(c0.HORA_DIGEST + 1), "una hora después ya no")
 
     os.environ.pop("DIGEST_MARGEN_HORAS", None)
+    import comun
+    d = importlib.reload(comun)
+    print(f"\nCon el margen por defecto ({d.MARGEN_HORAS}h, sin DIGEST_MARGEN_HORAS puesta):")
+    # Horas UTC reales en las que GitHub entregó el `schedule` la semana del
+    # 29/08 al 02/09/2026 (runs #8 a #13) — un único evento al día, entre 3 y
+    # 12 horas tarde. En CEST (UTC+2) son las 14:03, 14:30, 17:00, 14:45,
+    # 15:07 y 21:22 locales. Si esto falla, el margen por defecto volvió a
+    # quedarse corto para lo que GitHub tarda de verdad.
+    entregas_reales_utc = [12, 12, 15, 12, 13, 19]
+    for h_utc in entregas_reales_utc:
+        h_local = (h_utc + 2) % 24  # CEST = UTC+2; las seis caídas fueron en verano
+        comprobar(d.en_ventana(h_local),
+                  f"la entrega real de las {h_utc}:xx UTC ({h_local}:xx local) entra en la ventana")
 
     print()
     if fallos:

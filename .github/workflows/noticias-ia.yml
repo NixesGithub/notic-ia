@@ -8,15 +8,16 @@ name: Noticias IA diarias
 # encuentra algo, así que lo normal es que no aparezca).
 #
 # El cron de GitHub Actions sólo entiende UTC y Madrid cambia de offset con el
-# horario de verano, así que disparamos a varias horas UTC y es el script quien
-# decide cuáles caen en la ventana local (de 9:00 a 12:59):
-#   verano  (CEST): 07->09 sale, y 08->10, 09->11, 10->12 quedan de reserva
-#   invierno (CET): 07->08 se salta, 08->09 sale, y 09->10, 10->11 de reserva
+# horario de verano, así que el script decide en tiempo de ejecución si la hora
+# local cae en la ventana del digest (de DIGEST_HOUR a DIGEST_HOUR+MARGEN_HORAS).
 #
-# Los disparos de reserva no son paranoia: GitHub descarta ejecuciones
-# programadas cuando la plataforma va cargada (el 27/08/2026 no salió ninguna de
-# las dos). Reintentar es gratis porque la marca de caché corta el envío doble:
-# manda el primero que llega y los demás se saltan el paso de generar.
+# GitHub NO entrega el `schedule` cerca de la hora pedida. En la primera semana
+# real (29/08-02/09) llegó un único evento al día, entre 3 y 12 horas tarde, y
+# el 27/08 no llegó ninguno. Disparar a varias horas UTC (07,08,09,10) no evita
+# esto: GitHub igual sólo entrega uno, tarde. La defensa real es una ventana
+# ancha (ver DIGEST_MARGEN_HORAS más abajo) para no rechazar el único disparo
+# que llega. Reintentar/ampliar es gratis porque la marca de caché corta el
+# envío doble si alguna vez llegara más de uno el mismo día.
 on:
   schedule:
     - cron: '0 7,8,9,10 * * *'
@@ -59,10 +60,13 @@ jobs:
     env:
       DIGEST_TZ: Europe/Madrid
       DIGEST_HOUR: '9'
-      # Hasta cuántas horas después de DIGEST_HOUR se acepta un disparo de
-      # reserva. Tiene que cubrir el último cron: 10:00 UTC son las 12:00 en
-      # verano, o sea 3 horas de margen.
-      DIGEST_MARGEN_HORAS: '3'
+      # Hasta cuántas horas después de DIGEST_HOUR se acepta el digest. La
+      # primera semana real (29/08-02/09) GitHub entregó el `schedule` un único
+      # evento al día, entre 3 y 12 horas tarde (nunca dentro de una ventana de
+      # 3 horas) — no varios disparos de los que se pierden algunos, sino uno
+      # solo que llega tarde. 14 cubre hasta las 23:59 y no deja ese disparo
+      # afuera; la marca de caché es lo único que evita el envío doble.
+      DIGEST_MARGEN_HORAS: '14'
 
     steps:
       - uses: actions/checkout@v7

@@ -228,19 +228,25 @@ for half the year, so the workflow fires at **07:00, 08:00, 09:00 and 10:00 UTC*
 `noticias_ia.py` checks the local hour in `DIGEST_TZ`, exiting 0 on the runs that do not match.
 Changing the timezone or the hour means changing *both* the env vars and those UTC cron hours.
 
-**Scheduled runs get dropped, not just delayed.** On 2026-08-27 neither of the two crons that
-existed then fired at all and no digest went out. Hence four fires, and hence `en_ventana`: the
-guard accepts any local hour in `[DIGEST_HOUR, DIGEST_HOUR + DIGEST_MARGEN_HORAS]` (09:00–12:59)
-instead of demanding the exact hour — an exact-hour guard makes extra crons useless, because
-09:00 UTC is 11:00 local and the script would exit. Never *before* the requested hour: a 09:00
-digest must not go out at 08:00. `DIGEST_MARGEN_HORAS` has to cover the last cron (10:00 UTC =
-12:00 in summer), so widening the cron means rechecking the margin.
+**GitHub does not deliver `schedule` anywhere near the requested time.** This isn't a "the cron
+occasionally gets dropped" problem — it's that the delay is the normal case. On 2026-08-27 neither
+of the two crons that existed then fired at all. Then, with four crons (07-10 UTC) and a 3h window
+(09:00-12:59 local), *every single scheduled run for a week* (2026-08-29 through 09-02, runs #8-13)
+missed the window: GitHub delivered exactly one `schedule` event per day, 3 to 12 hours late
+(12:03, 12:30, 15:00, 12:45, 13:07, 19:22 UTC — none within 3h of the 07-10 UTC cron), and
+`en_ventana` rejected all six. Having multiple cron entries doesn't help against this: GitHub
+still only delivers one event, just a late one — so the fix is not more crons, it's a wide enough
+window to not reject the one that arrives. `DIGEST_MARGEN_HORAS` defaults to 14 (09:00-23:59) for
+exactly this reason; if you find yourself narrowing it, first check whether GitHub's actual
+delivery lag has improved, not just assume the old 3h reasoning still holds. Never *before* the
+requested hour: a 09:00 digest must not go out at 08:00.
 
-Retries are only free because the marker in the Actions cache (`noticias-ia-enviado-<date>`) makes
-the first run of the day the only one that sends. **That marker is now load-bearing, not a
-nicety** — with four fires inside the window, removing it means four digests. `test_ventana.py`
-derives the local hours from the real YAML for a summer and a winter date, so it fails if the cron
-and the margin drift apart.
+The marker in the Actions cache (`noticias-ia-enviado-<date>`) is what prevents a double send if
+more than one `schedule` event ever does land the same day — with a 14h window that's the only
+thing standing between a good day and duplicate digests, so don't remove it when touching the
+cron or the margin. `test_ventana.py` checks the *default* margin (not a hardcoded test value)
+against the actual UTC hours GitHub delivered in that first production week, converted to Madrid
+local time — so it fails if the margin ever gets narrowed below what GitHub actually does.
 
 ## Gotchas that cost real debugging time
 

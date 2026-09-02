@@ -20,10 +20,14 @@ from zoneinfo import ZoneInfo
 # está definida, y entonces el default de get() nunca se aplica.
 ZONA = ZoneInfo(os.environ.get("DIGEST_TZ") or "Europe/Madrid")
 HORA_DIGEST = int(os.environ.get("DIGEST_HOUR") or "9")
-# GitHub descarta ejecuciones programadas cuando la plataforma va cargada, así que
-# el workflow dispara varias veces y aceptamos el digest dentro de una ventana en
-# vez de exigir la hora exacta. Quien impide el envío doble es la marca de caché.
-MARGEN_HORAS = int(os.environ.get("DIGEST_MARGEN_HORAS") or "3")
+# GitHub no entrega los `schedule` cerca de la hora pedida: en la primera semana
+# real (29/08 a 02/09) llegó un único evento por día, entre 3 y 12 horas tarde
+# (12:03, 12:30, 15:00, 12:45, 13:07 y 19:22 UTC, contra un cron a las 7-10 UTC),
+# y ninguno cayó dentro de una ventana de 3 horas. No son varios disparos de los
+# que unos se pierden: es uno solo, y llega cuando llega. El margen por defecto
+# cubre el resto del día (hasta las 23:59) para no perder ese único disparo.
+# Quien impide el envío doble es la marca de caché, no la ventana.
+MARGEN_HORAS = int(os.environ.get("DIGEST_MARGEN_HORAS") or "14")
 
 # Muchos servidores rechazan el User-Agent por defecto de urllib con un 403.
 AGENTE = "Mozilla/5.0 (compatible; notic-ia/1.0; +https://github.com/NixesGithub/notic-ia)"
