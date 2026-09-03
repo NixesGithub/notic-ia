@@ -4,7 +4,10 @@
 > backend de suscriptores vive en el repo `newsletter-api`. Este proyecto queda
 > como referencia histórica; no levantes `docker compose` salvo para consulta.
 > Los contenedores locales están apagados (`docker compose down`, volumen
-> `n8n_data` preservado). 
+> `n8n_data` preservado).
+> El pipeline Python de Actions también está deshabilitado
+> (`.github/workflows/noticias-ia.yml.disabled`): la generación y el envío
+> viven únicamente en el repo `newsletter-api`.
 
 A custom newspaper every morning with news of my preference.
 
