@@ -1,4 +1,10 @@
-# Notic-IA 
+# Notic-IA
+
+> **RETIRADO (2026-09-03).** El digest diario ahora corre en GitHub Actions y el
+> backend de suscriptores vive en el repo `newsletter-api`. Este proyecto queda
+> como referencia histórica; no levantes `docker compose` salvo para consulta.
+> Los contenedores locales están apagados (`docker compose down`, volumen
+> `n8n_data` preservado). 
 
 A custom newspaper every morning with news of my preference.
 
