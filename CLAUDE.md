@@ -134,13 +134,14 @@ Because a partial parse fails silently by design (one missing field is not fatal
 across all rows means that field's anchor is gone, and the `--dry-run` listing prints the language so
 the same failure is visible there too. Check those counters before believing a green run.
 
-**The daily digest exists twice, on purpose.** `workflows/noticias-ia.json` runs it in local n8n at
-11:00; `.github/workflows/noticias-ia.yml` + `scripts/noticias_ia.py` run the same pipeline on
-GitHub's runners at 09:00 Europe/Madrid. The n8n copy only fires if this machine happens to be awake
-— n8n does not replay missed schedule triggers — so the Actions copy is the one that does not skip
-days, and the n8n UI is the comfortable place to *edit* the pipeline. The two share no code:
-**a change to the ranking, the prompt, the schema or the sources must be made in both**, or they
-drift. The Python port is a faithful translation of the Code nodes, down to the scoring formula and
+**Nothing here runs any more (retired 2026-09-03, Actions workflow deleted 2026-09-22).** The live
+digest is `newsletter-api`; this repo is reference only. Historically the digest existed twice, on
+purpose: `workflows/noticias-ia.json` ran it in local n8n at 11:00, and a GitHub Actions workflow
+plus `scripts/noticias_ia.py` ran the same pipeline on GitHub's runners at 09:00 Europe/Madrid. The
+n8n copy only fired if this machine happened to be awake — n8n does not replay missed schedule
+triggers — so the Actions copy was the one that did not skip days, and the n8n UI was the
+comfortable place to *edit* the pipeline. The two shared no code, so a change to the ranking, the
+prompt, the schema or the sources had to be made in both or they drifted. The Python port is a faithful translation of the Code nodes, down to the scoring formula and
 the dedupe key.
 
 Prose (README, comments, node names, UI strings) is written in **Spanish**, per the parent workspace
