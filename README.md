@@ -5,24 +5,27 @@
 > como referencia histórica; no levantes `docker compose` salvo para consulta.
 > Los contenedores locales están apagados (`docker compose down`, volumen
 > `n8n_data` preservado).
-> El pipeline Python de Actions también está deshabilitado
-> (`.github/workflows/noticias-ia.yml.disabled`): la generación y el envío
-> viven únicamente en el repo `newsletter-api`.
+> El pipeline Python de Actions está **eliminado** (2026-09-22): la generación y
+> el envío viven únicamente en el repo `newsletter-api`. Deshabilitarlo
+> renombrando el fichero no bastaba — "Re-run" en una ejecución antigua saca el
+> workflow del commit original y lo ejecuta igual, saltándose lo que haya en
+> `main`. Los scripts de `scripts/` se conservan como referencia, pero ya no los
+> dispara nada.
 
 A custom newspaper every morning with news of my preference.
 
 
-Hay **dos formas de ejecutar el digest diario**, con la misma lógica en las dos:
+Históricamente hubo **dos formas de ejecutar el digest diario**, con la misma
+lógica en las dos:
 
-| | Dónde corre | Cuándo | Qué manda | Depende del portátil |
+| | Dónde corría | Cuándo | Qué mandaba | Estado |
 |---|---|---|---|---|
-| **GitHub Actions** | Runners de GitHub | 09:00 hora de Madrid | Noticias + repos + resumen + cruce con tus proyectos | No |
-| **n8n local** | Docker en tu máquina | 11:00 hora de Madrid | Sólo noticias | Sí |
+| **GitHub Actions** | Runners de GitHub | 09:00 hora de Madrid | Noticias + repos + resumen + cruce con tus proyectos | Eliminado (2026-09-22) |
+| **n8n local** | Docker en tu máquina | 11:00 hora de Madrid | Sólo noticias | Apagado |
 
-La de GitHub Actions es la que no se salta días: n8n no recupera los triggers de
-schedule que se pierde, así que con el equipo apagado o suspendido a las 11:00 no
-hay digest. Está en [`.github/workflows/noticias-ia.yml`](.github/workflows/noticias-ia.yml)
-y se documenta [más abajo](#digest-en-github-actions).
+Ninguna de las dos está activa. El digest vivo es el de `newsletter-api`. La
+descripción del pipeline de Actions [más abajo](#digest-en-github-actions) se
+mantiene porque documenta los scripts de `scripts/`, que siguen en el repo.
 
 El resto de este README es la instancia local de [n8n](https://n8n.io) levantada
 con Docker Compose, que importa automáticamente sus workflows al arrancar. Sigue
@@ -43,8 +46,6 @@ notic-ia/
 ├── .env                        # clave de cifrado, puerto, zona horaria, chat de Telegram
 ├── .env.example                # plantilla de .env
 ├── requirements.txt            # dependencias de la versión de GitHub Actions
-├── .github/workflows/
-│   └── noticias-ia.yml         # el cron de las 9:00 y el job
 ├── scripts/
 │   ├── noticias_ia.py          # entrada; sección de noticias + orquestación
 │   ├── repos.py                # sección de repos en tendencia
