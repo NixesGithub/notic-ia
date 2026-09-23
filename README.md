@@ -11,6 +11,12 @@
 > workflow del commit original y lo ejecuta igual, saltándose lo que haya en
 > `main`. Los scripts de `scripts/` se conservan como referencia, pero ya no los
 > dispara nada.
+>
+> **Pendiente (2026-09-23):** borrar los 4 secrets del repo
+> (`ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, `TELEGRAM_BOT_TOKEN`,
+> `TELEGRAM_CHAT_ID`) y desactivar Actions. El token es el **mismo bot** del
+> digest vivo: un «Re-run» sobre un run viejo podría mandar un digest duplicado.
+> El digest actual usa Gemini, no Anthropic (ver `newsletter-api`).
 
 A custom newspaper every morning with news of my preference.
 
